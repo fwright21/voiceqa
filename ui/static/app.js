@@ -23,6 +23,12 @@ function setJson(el, obj) {
   el.textContent = typeof obj === "string" ? obj : pretty(obj);
 }
 
+function setHidden(el, hidden) {
+  if (!el) return;
+  if (hidden) el.classList.add("hidden");
+  else el.classList.remove("hidden");
+}
+
 function downloadText(filename, text, mime = "application/json") {
   const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -56,6 +62,38 @@ function switchTab(tabId) {
 
   document.querySelector(`.tab[data-tab="${tabId}"]`)?.classList.add("active");
   $(`tab-${tabId}`)?.classList.add("active");
+}
+
+function verdictHelpText(verdict) {
+  if (verdict === "FAIL") return "FAIL — critical fidelity or audio issues detected (should block release).";
+  if (verdict === "REVIEW") return "REVIEW — non-critical issues or uncertain findings (listen and decide).";
+  if (verdict === "LOW_CONFIDENCE") return "LOW_CONFIDENCE — analysis ran, but key signals were missing/low confidence.";
+  if (verdict === "PASS") return "PASS — no major issues crossed thresholds.";
+  return "";
+}
+
+function fmtTime(sec) {
+  if (sec === null || sec === undefined || Number.isNaN(Number(sec))) return "—";
+  const s = Math.max(0, Number(sec));
+  const m = Math.floor(s / 60);
+  const r = s - m * 60;
+  return `${String(m).padStart(2, "0")}:${r.toFixed(1).padStart(4, "0")}`;
+}
+
+function renderList(container, items) {
+  if (!container) return;
+  if (!items || items.length === 0) {
+    container.textContent = "—";
+    return;
+  }
+  const ul = document.createElement("ul");
+  for (const it of items) {
+    const li = document.createElement("li");
+    li.textContent = String(it);
+    ul.appendChild(li);
+  }
+  container.innerHTML = "";
+  container.appendChild(ul);
 }
 
 document.querySelectorAll(".tab").forEach((btn) => {
@@ -364,6 +402,8 @@ async function runSuite() {
   $("eval-top-failures").innerHTML = "";
   $("eval-cases").innerHTML = "";
   renderBaselineDelta(null);
+  setHidden($("eval-secondary-actions"), true);
+  setHidden($("eval-verdict-help"), true);
 
   try {
     const includeReports = $("eval-include-reports").checked;
@@ -388,6 +428,15 @@ async function runSuite() {
     setScore($("eval-avg-score"), summary.avg_score);
     renderTopFailures(summary.top_failures || []);
     setJson($("eval-json"), data);
+
+    // Reveal secondary actions once a run exists.
+    setHidden($("eval-secondary-actions"), false);
+    const help = verdictHelpText("REVIEW");
+    const helpEl = $("eval-verdict-help");
+    if (helpEl) {
+      helpEl.textContent = help + " Suite summary shows counts; use case cards for details.";
+      setHidden(helpEl, false);
+    }
   } catch (e) {
     setJson($("eval-json"), { error: String(e) });
     setSummary($("eval-summary"), "Error");
@@ -449,6 +498,7 @@ async function runSingle(formEvent) {
   setVerdict($("single-verdict"), "Running...");
   setScore($("single-score"), null);
   setJson($("single-json"), "Uploading and analysing...");
+  setHidden($("single-verdict-help"), true);
 
   try {
     const fd = new FormData();
@@ -460,6 +510,67 @@ async function runSingle(formEvent) {
     setVerdict($("single-verdict"), data.verdict);
     setScore($("single-score"), data.score);
     setJson($("single-json"), data);
+
+    const helpEl = $("single-verdict-help");
+    if (helpEl) {
+      helpEl.textContent = verdictHelpText(data.verdict);
+      setHidden(helpEl, false);
+    }
+
+    // Why flagged
+    renderList($("single-failures"), (data.failures || []).slice(0, 10));
+
+    // Flagged moments: pauses + pause_naturalness + pops/clicks
+    const moments = [];
+    const pn = data?.metrics?.pause_naturalness || {};
+    if (Array.isArray(pn?.flags)) {
+      for (const f of pn.flags.slice(0, 6)) {
+        const start = f.start_sec ?? null;
+        const end = f.end_sec ?? null;
+        const dur = f.duration_sec ?? null;
+        moments.push(`${fmtTime(start)}–${fmtTime(end)} · ${f.type || "pause"} · ${dur ? dur.toFixed(2) + "s" : "—"}`);
+      }
+    }
+    const pauses = data?.metrics?.pauses?.pauses || [];
+    if (Array.isArray(pauses)) {
+      for (const p of pauses.slice(0, 4)) {
+        if (p?.duration_sec >= 1.0) {
+          moments.push(`${fmtTime(p.start_sec)}–${fmtTime(p.end_sec)} · silence · ${Number(p.duration_sec).toFixed(2)}s`);
+        }
+      }
+    }
+    const artifacts = data?.metrics?.artifacts?.artifacts || [];
+    if (Array.isArray(artifacts)) {
+      for (const a of artifacts.slice(0, 3)) {
+        moments.push(`artifact · ${a.type} · ${a.detail}`);
+      }
+    }
+    renderList($("single-moments"), moments);
+
+    // Transcript comparison: show top non-equal diff ops
+    const diffOps = data?.metrics?.accuracy?.diff_ops || [];
+    const diffs = [];
+    if (Array.isArray(diffOps)) {
+      for (const op of diffOps) {
+        if (!op || op.op === "equal") continue;
+        diffs.push(`${op.op}: expected="${op.expected}" actual="${op.actual}"`);
+        if (diffs.length >= 6) break;
+      }
+    }
+    renderList($("single-diff"), diffs);
+
+    // Key metrics
+    const m = [];
+    const acc = data?.metrics?.accuracy || {};
+    if (acc?.wer !== undefined) m.push(`WER: ${acc.wer}`);
+    if (acc?.accuracy_pct !== undefined) m.push(`Accuracy: ${acc.accuracy_pct}%`);
+    const mos = data?.metrics?.mos?.mos_score;
+    if (mos !== undefined && mos !== null) m.push(`MOS: ${mos}`);
+    const tc = data?.metrics?.transcript_confidence || data?.transcript_confidence;
+    if (tc) m.push(`Transcript confidence: ${tc}`);
+    const ent = data?.metrics?.entity_fidelity || {};
+    if (ent?.mismatch_count) m.push(`Entity mismatches: ${ent.mismatch_count}`);
+    renderList($("single-metrics"), m);
   } catch (e) {
     setVerdict($("single-verdict"), "Error");
     setJson($("single-json"), { error: String(e) });
@@ -525,6 +636,11 @@ $("single-clear").addEventListener("click", () => {
   setScore($("single-score"), null);
   setJson($("single-json"), "Run an analysis to see output.");
   lastSingleResult = null;
+  setHidden($("single-verdict-help"), true);
+  $("single-failures").textContent = "Run an analysis to see results.";
+  $("single-moments").textContent = "—";
+  $("single-diff").textContent = "—";
+  $("single-metrics").textContent = "—";
 });
 
 $("single-download-json")?.addEventListener("click", () => {

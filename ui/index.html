@@ -26,14 +26,15 @@
         <div class="hero-top">
           <div>
             <div class="kicker">Quick start</div>
-            <h1 class="hero-title">VoiceQA helps you QA what was said and how it sounded.</h1>
+            <h1 class="hero-title">Catch voice agent failures transcript evals miss.</h1>
             <div class="hero-subtitle">
-              Run a single clip, or run curated eval suites with local audio and review the exact flagged moments.
+              VoiceQA checks both <strong>content fidelity</strong> and <strong>delivery quality</strong> — including exact numbers, meaning flips,
+              pauses, clipping, and regressions across suites.
             </div>
           </div>
           <div class="hero-actions">
-            <button class="btn secondary" type="button" id="hero-go-single">Single Analyse</button>
-            <button class="btn" type="button" id="hero-go-eval">Eval Suites</button>
+            <button class="btn secondary" type="button" id="hero-go-single">Analyse One Clip</button>
+            <button class="btn" type="button" id="hero-go-eval">Run Eval Suite</button>
           </div>
         </div>
 
@@ -58,7 +59,7 @@
       </section>
 
       <nav class="tabs" role="tablist">
-        <button class="tab active" data-tab="single" role="tab">Single Analyse</button>
+        <button class="tab active" data-tab="single" role="tab">Analyse One Clip</button>
         <button class="tab" data-tab="eval" role="tab">Eval Suites</button>
       </nav>
 
@@ -66,7 +67,7 @@
         <section class="panel active" id="tab-single" role="tabpanel">
           <h2>Analyse one audio file</h2>
           <p class="muted">
-            Upload an audio file and the expected script. VoiceQA will transcribe, score, and return verdict + metrics.
+            Upload an audio file and the expected script. VoiceQA runs fidelity + audio checks and returns a verdict with flagged issues.
           </p>
 
           <form id="single-form" class="card">
@@ -103,6 +104,7 @@
                 <div>
                   <div class="kicker">Result</div>
                   <div id="single-verdict" class="verdict">—</div>
+                  <div id="single-verdict-help" class="hint" style="margin-top:10px; display:none;"></div>
                 </div>
                 <div class="score">
                   <div class="kicker">Score</div>
@@ -114,7 +116,31 @@
                   <button class="btn secondary" type="button" id="single-copy-json">Copy JSON</button>
                 </div>
               </div>
-              <pre id="single-json" class="json">Run an analysis to see output.</pre>
+
+              <div class="section">
+                <div class="section-h">Why it was flagged</div>
+                <div id="single-failures" class="kv">Run an analysis to see results.</div>
+              </div>
+
+              <div class="section">
+                <div class="section-h">Flagged moments</div>
+                <div id="single-moments" class="kv muted">—</div>
+              </div>
+
+              <div class="section">
+                <div class="section-h">Transcript comparison</div>
+                <div id="single-diff" class="kv muted">—</div>
+              </div>
+
+              <div class="section">
+                <div class="section-h">Key metrics</div>
+                <div id="single-metrics" class="kv muted">—</div>
+              </div>
+
+              <details class="section">
+                <summary class="section-h">Raw JSON</summary>
+                <pre id="single-json" class="json">Run an analysis to see output.</pre>
+              </details>
             </div>
           </div>
         </section>
@@ -142,16 +168,18 @@
             <div class="row actions">
               <button class="btn" id="eval-refresh" type="button">Refresh Suites</button>
               <button class="btn" id="eval-run" type="button">Run Suite</button>
-              <button class="btn secondary" id="eval-save-baseline" type="button">Save Baseline</button>
-              <button class="btn secondary" id="eval-compare-baseline" type="button">Compare</button>
-              <button class="btn secondary" id="eval-download-json" type="button">Download JSON</button>
-              <button class="btn secondary" id="eval-download-csv" type="button">Download CSV</button>
+              <div id="eval-secondary-actions" class="inline hidden">
+                <button class="btn secondary" id="eval-save-baseline" type="button">Save Baseline</button>
+                <button class="btn secondary" id="eval-compare-baseline" type="button">Compare to Baseline</button>
+                <button class="btn secondary" id="eval-download-json" type="button">Download JSON</button>
+                <button class="btn secondary" id="eval-download-csv" type="button">Download CSV</button>
+              </div>
             </div>
             <div class="row">
               <div class="row" style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
                 <label class="label" style="display:flex; align-items:center; gap:10px; margin:0;">
                   <input id="eval-include-reports" type="checkbox" checked />
-                  Show per-case review list (recommended)
+                  Show case review cards (recommended)
                 </label>
                 <label class="label" style="display:flex; align-items:center; gap:10px; margin:0;">
                   <input id="eval-show-pass" type="checkbox" />
@@ -159,7 +187,7 @@
                 </label>
                 <label class="label" style="display:flex; align-items:center; gap:10px; margin:0;">
                   <input id="eval-full-json" type="checkbox" />
-                  Include full metrics JSON (very large)
+                  Include raw metrics JSON (very large)
                 </label>
               </div>
             </div>
@@ -205,6 +233,7 @@
                 <div>
                   <div class="kicker">Summary</div>
                   <div id="eval-summary" class="summary">—</div>
+                  <div id="eval-verdict-help" class="hint" style="margin-top:10px; display:none;"></div>
                 </div>
                 <div class="score">
                   <div class="kicker">Avg score</div>

@@ -31,6 +31,9 @@ code { font-family: var(--mono); font-size: 0.92em; }
 
 .app { max-width: 1050px; margin: 0 auto; padding: 22px 18px 48px; }
 
+.hidden { display: none !important; }
+.inline { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
 .header {
   display: flex;
   align-items: center;
@@ -223,6 +226,12 @@ summary:focus-visible {
   overflow: auto;
   max-height: 420px;
 }
+
+.section { margin-top: 12px; }
+.section-h { font-size: 12.5px; color: var(--text); font-weight: 850; }
+.kv { font-size: 13px; line-height: 1.5; color: var(--muted); }
+.kv ul { margin: 8px 0 0; padding-left: 18px; }
+.kv li { margin: 4px 0; }
 
 .top-failures {
   margin: 10px 0 10px;
