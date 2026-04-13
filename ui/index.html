@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VoiceQA</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div class="brand">
+          <div class="logo">VQ</div>
+          <div>
+            <div class="title">VoiceQA</div>
+            <div class="subtitle">Voice agent QA — scripts, audio, and eval suites</div>
+          </div>
+        </div>
+        <div class="header-actions">
+          <a class="link" href="/docs" target="_blank" rel="noreferrer">API Docs</a>
+          <a class="link" href="/health" target="_blank" rel="noreferrer">Health</a>
+        </div>
+      </header>
+
+      <section class="hero card" aria-label="Quick start">
+        <div class="hero-top">
+          <div>
+            <div class="kicker">Quick start</div>
+            <h1 class="hero-title">VoiceQA helps you QA what was said and how it sounded.</h1>
+            <div class="hero-subtitle">
+              Run a single clip, or run curated eval suites with local audio and review the exact flagged moments.
+            </div>
+          </div>
+          <div class="hero-actions">
+            <button class="btn secondary" type="button" id="hero-go-single">Single Analyse</button>
+            <button class="btn" type="button" id="hero-go-eval">Eval Suites</button>
+          </div>
+        </div>
+
+        <div class="hero-grid">
+          <div class="hero-block">
+            <div class="hero-h">Suggested demos</div>
+            <ul class="hero-list">
+              <li><code>symptom-triage</code> — “should pass” baseline suite (terms + vitals)</li>
+              <li><code>hallucination-demo</code> — intentional additions/omissions/contradictions</li>
+              <li><code>prosody-demo</code> — deterministic weird pauses / pacing (flags + jump-to)</li>
+            </ul>
+          </div>
+          <div class="hero-block">
+            <div class="hero-h">Tips</div>
+            <ul class="hero-list">
+              <li>Audio is local-only; manifests are committed.</li>
+              <li>Use <em>Save Baseline</em> + <em>Compare</em> to track regressions.</li>
+              <li>Use the per-case <em>Jump</em> buttons to listen to flagged regions.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="single" role="tab">Single Analyse</button>
+        <button class="tab" data-tab="eval" role="tab">Eval Suites</button>
+      </nav>
+
+      <main class="content">
+        <section class="panel active" id="tab-single" role="tabpanel">
+          <h2>Analyse one audio file</h2>
+          <p class="muted">
+            Upload an audio file and the expected script. VoiceQA will transcribe, score, and return verdict + metrics.
+          </p>
+
+          <form id="single-form" class="card">
+            <div class="row">
+              <label class="label">
+                Audio file
+                <input id="single-audio" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg" required />
+              </label>
+            </div>
+
+            <div class="row">
+              <label class="label">
+                Expected script
+                <textarea id="single-script" rows="5" placeholder="Paste what the agent was supposed to say..." required></textarea>
+              </label>
+            </div>
+
+            <div class="row actions">
+              <button class="btn" type="submit">Run Analysis</button>
+              <button class="btn secondary" type="button" id="single-clear">Clear</button>
+              <button class="btn secondary" type="button" id="single-download-json">Download JSON</button>
+            </div>
+
+            <div class="row">
+              <div class="hint">
+                Tip: if Ollama is not running, VoiceQA will still complete end-to-end and generate a deterministic report.
+              </div>
+            </div>
+          </form>
+
+          <div class="results">
+            <div class="card">
+              <div class="results-header">
+                <div>
+                  <div class="kicker">Result</div>
+                  <div id="single-verdict" class="verdict">—</div>
+                </div>
+                <div class="score">
+                  <div class="kicker">Score</div>
+                  <div id="single-score" class="score-value">—</div>
+                </div>
+              </div>
+              <div class="toolbar">
+                <div class="toolbar-left">
+                  <button class="btn secondary" type="button" id="single-copy-json">Copy JSON</button>
+                </div>
+              </div>
+              <pre id="single-json" class="json">Run an analysis to see output.</pre>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="tab-eval" role="tabpanel">
+          <h2>Run an eval suite</h2>
+          <p class="muted">
+            Suites live in <code>eval_set/suites/</code>. Manifests are committed; audio files are usually local-only.
+          </p>
+
+          <div class="card">
+            <div class="row">
+              <label class="label">
+                Suite
+                <select id="eval-suite"></select>
+              </label>
+            </div>
+            <div class="row">
+              <div class="hint">
+                Suite manifests can include <code>expected_terms</code> for hard symptom/medication words
+                (e.g. dyspnea, hemoptysis, levetiracetam). These are checked via <code>term_fidelity</code>.
+              </div>
+            </div>
+
+            <div class="row actions">
+              <button class="btn" id="eval-refresh" type="button">Refresh Suites</button>
+              <button class="btn" id="eval-run" type="button">Run Suite</button>
+              <button class="btn secondary" id="eval-save-baseline" type="button">Save Baseline</button>
+              <button class="btn secondary" id="eval-compare-baseline" type="button">Compare</button>
+              <button class="btn secondary" id="eval-download-json" type="button">Download JSON</button>
+              <button class="btn secondary" id="eval-download-csv" type="button">Download CSV</button>
+            </div>
+            <div class="row">
+              <div class="row" style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+                <label class="label" style="display:flex; align-items:center; gap:10px; margin:0;">
+                  <input id="eval-include-reports" type="checkbox" checked />
+                  Show per-case review list (recommended)
+                </label>
+                <label class="label" style="display:flex; align-items:center; gap:10px; margin:0;">
+                  <input id="eval-show-pass" type="checkbox" />
+                  Include PASS cases
+                </label>
+                <label class="label" style="display:flex; align-items:center; gap:10px; margin:0;">
+                  <input id="eval-full-json" type="checkbox" />
+                  Include full metrics JSON (very large)
+                </label>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="filters">
+                <label class="label" style="margin:0;">
+                  Search cases
+                  <input id="eval-search" type="text" placeholder="case id, tag, failure, expected term..." />
+                </label>
+                <label class="label" style="margin:0;">
+                  Sort
+                  <select id="eval-sort">
+                    <option value="severity">Severity</option>
+                    <option value="score_asc">Score (low→high)</option>
+                    <option value="score_desc">Score (high→low)</option>
+                    <option value="case_id">Case id</option>
+                  </select>
+                </label>
+                <label class="label" style="margin:0;">
+                  Verdict
+                  <select id="eval-filter-verdict">
+                    <option value="non_pass">Non-PASS</option>
+                    <option value="all">All</option>
+                    <option value="fail">FAIL only</option>
+                    <option value="review">REVIEW only</option>
+                    <option value="pass">PASS only</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="hint">
+                If audio files are missing, cases will FAIL fast with a “Missing audio file” reason.
+              </div>
+            </div>
+          </div>
+
+          <div class="results">
+            <div class="card">
+              <div class="results-header">
+                <div>
+                  <div class="kicker">Summary</div>
+                  <div id="eval-summary" class="summary">—</div>
+                </div>
+                <div class="score">
+                  <div class="kicker">Avg score</div>
+                  <div id="eval-avg-score" class="score-value">—</div>
+                </div>
+              </div>
+              <div id="eval-baseline-delta" class="hint" style="display:none;"></div>
+              <div id="eval-top-failures" class="top-failures"></div>
+              <div id="eval-cases" class="cases"></div>
+              <pre id="eval-json" class="json">Load suites to begin.</pre>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

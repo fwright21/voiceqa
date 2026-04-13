@@ -1,20 +1,18 @@
-from tools.detect_audio_artifacts import detect_audio_artifacts
+from pathlib import Path
 
-result = detect_audio_artifacts.invoke({"audio_path": "test_audio.wav"})
 
-print("=== AUDIO ARTIFACT REPORT ===")
-print(f"Overall clean: {result['overall_clean']}")
-print(f"Artifacts found: {result['artifact_count']}")
+def test_detect_audio_artifacts_returns_expected_shape():
+    from tools.detect_audio_artifacts import detect_audio_artifacts
 
-print("\n=== RAW MEASUREMENTS ===")
-print(f"Clipping:    {result['clipping_pct']}% of samples")
-print(f"DC offset:   {result['dc_offset']}")
-print(f"Noise ratio: {result['noise_ratio']}")
-print(f"Pop count:   {result['pop_count']}")
+    audio_path = str(Path(__file__).resolve().parent / "test_audio.wav")
+    result = detect_audio_artifacts.invoke({"audio_path": audio_path})
 
-if result['artifact_count'] > 0:
-    print("\n=== FLAGGED ARTIFACTS ===")
-    for a in result['artifacts']:
-        print(f"  ⚠️  [{a['severity'].upper()}] {a['type']}: {a['detail']}")
-else:
-    print("\n✅ No artifacts detected")
+    assert set(["artifacts", "artifact_count", "overall_clean"]).issubset(result.keys())
+    assert isinstance(result["artifacts"], list)
+    assert isinstance(result["artifact_count"], int)
+    assert isinstance(result["overall_clean"], bool)
+    assert isinstance(result.get("clipping_pct"), (int, float))
+    assert isinstance(result.get("dc_offset"), (int, float))
+    assert isinstance(result.get("noise_ratio"), (int, float))
+    assert isinstance(result.get("pop_count"), int)
+    assert isinstance(result.get("clipping_detected"), bool)

@@ -1,8 +1,8 @@
 from pathlib import Path
-import librosa
 import numpy as np
-from scipy import signal as scipy_signal
 from langchain_core.tools import tool
+
+from tools.audio_io import load_mono_audio
 
 @tool("detect_audio_artifacts")
 def detect_audio_artifacts(audio_path: str) -> dict:
@@ -20,12 +20,13 @@ def detect_audio_artifacts(audio_path: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-    y, sr = librosa.load(str(path), sr=None, mono=True)
+    y, sr = load_mono_audio(str(path))
     artifacts = []
 
     # ---- 1. CLIPPING ----
     clipped = int(np.sum(np.abs(y) >= 0.98))
     clipping_pct = round(100.0 * clipped / len(y), 4)
+    clipping_detected = clipping_pct > 0.01
     if clipping_pct > 0.01:
         artifacts.append({
             "type":     "clipping",
@@ -60,9 +61,7 @@ def detect_audio_artifacts(audio_path: str) -> dict:
     pop_mask = diff > 0.3
     pop_count = int(np.sum(pop_mask))
     if pop_count > 0:
-        pop_times = librosa.samples_to_time(
-            np.where(pop_mask)[0], sr=sr
-        ).tolist()
+        pop_times = (np.where(pop_mask)[0].astype(np.float64) / float(sr)).tolist()
         artifacts.append({
             "type":     "pops_clicks",
             "severity": "high" if pop_count > 10 else "low",
@@ -73,6 +72,7 @@ def detect_audio_artifacts(audio_path: str) -> dict:
         "artifacts":      artifacts,
         "artifact_count": len(artifacts),
         "clipping_pct":   clipping_pct,
+        "clipping_detected": clipping_detected,
         "dc_offset":      round(dc_offset, 6),
         "noise_ratio":    noise_ratio,
         "pop_count":      pop_count,
