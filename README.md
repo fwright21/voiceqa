@@ -1,43 +1,52 @@
 # VoiceQA
 
-Voice Agent Quality Assurance — a practical QA harness for **what a voice agent said** and **how it sounded**.
+Local-first QA for voice agents — catch transcript errors, meaning drift, and audio issues **before they reach production**.
 
-If you’re building voice agents (especially for healthcare), you quickly run into a gap:
-most evals stop at transcripts. In real calls you also need to catch:
-- numbers and vitals that can’t be “approximately right”
-- meaning flips (negations / omissions)
-- audio issues (clipping, long silences, instability) that break trust
+Voice agents can pass transcript-based evals and still fail real-world QA:
+- a spoken number can be wrong (`92%` → `72%`)
+- a negation can disappear (“denies chest pain” → “chest pain”)
+- a long pause can make the agent sound broken even when the words are correct
+- clipping/instability can undermine trust and usability
 
-VoiceQA is a small, local-first tool that makes these failure modes visible and regression-testable.
+In healthcare (and other high-stakes settings), “approximately right” is often still wrong.
 
-## What it does
+VoiceQA exists to catch the failures transcript evals miss.
 
-Accepts an audio file plus the expected script, runs a **10-stage analysis pipeline**, and returns a structured quality report covering:
+## Mental model
+
+VoiceQA is a QA harness, not just an analysis UI:
+1. Provide **expected script** + **actual audio**
+2. Run layered checks (deterministic first; LLM judge is optional and advisory)
+3. Return a structured verdict: `PASS | REVIEW | FAIL | LOW_CONFIDENCE`
+4. Save reports locally and run curated suites to catch regressions over time
+
+## Why this is different
+
+VoiceQA is designed to **fail loudly on the things that matter**:
+- **Deterministic-first**: entities/vitals/terms/pauses/artifacts don’t depend on an LLM
+- **Local-first**: practical for sensitive workflows (use synthetic scripts for public repos; keep audio local)
+- **Regression-oriented**: curated suites + baselines, not one-off inspection
+- **Graceful degradation**: if Ollama or optional tooling isn’t available, the system still runs end-to-end
+
+Transcript accuracy is necessary, not sufficient. VoiceQA is built for the rest.
+
+## What it checks
+
+Accepts an audio file plus the expected script, runs a layered pipeline, and returns a structured quality report:
 
 - **Transcription + confidence gate** (Whisper)
-- **Alignment spans (when available)** — word + phrase spans for timing-based checks (Whisper word timestamps)
-- **Transcript accuracy** — WER/MER/WIL + word diff (jiwer)
-- **Audio artifacts** — clipping, DC offset, high‑frequency noise, pops/clicks
-- **Pause detection** — silence gaps with timestamps
-- **Pause naturalness (alignment-based)** — within‑phrase vs between‑phrase timing gaps + speaking rate (deterministic)
+- **Transcript accuracy** — WER/MER/WIL + diff (jiwer)
+- **Audio artifacts** — clipping, DC offset, noise, pops/clicks (deterministic)
+- **Pauses** — silence gaps with timestamps (deterministic)
+- **Pause naturalness** — classify pauses as within‑phrase vs between‑phrase (deterministic)
 - **Prosody** — F0 mean, jitter, shimmer, HNR (Praat/Parselmouth; graceful skip)
 - **MOS prediction** — DNSMOS via SpeechMOS (graceful skip)
-- **Entity fidelity** — numbers/codes/dates mismatches
+- **Entity fidelity** — numbers/codes/dates mismatches (deterministic)
+- **Vitals fidelity** — BP / SpO2 / temperature parsing + comparison (deterministic, suite-only)
+- **Term fidelity** — “must preserve” symptom/medication words with criticality weights (suite-only)
 - **Name fidelity** — proper noun/name mismatches (conservative extraction + fuzzy match)
-- **Faithfulness** — semantic-only LLM-as-judge (Ollama; graceful skip; always low confidence)
-- **QA report + verdict** — PASS / REVIEW / FAIL / LOW_CONFIDENCE
-- **History** — all reports saved to SQLite (`voiceqa.db`)
-
-If Ollama isn’t running (or models aren’t available), VoiceQA still runs end‑to‑end: the LLM steps are skipped and the QA report is generated deterministically.
-
-## Why this exists
-
-Transcript-only metrics (like WER) are helpful, but insufficient for real voice product quality:
-- **Entity safety:** “92 percent” vs “72 percent” is not a small typo.
-- **Meaning flips:** negations and omissions can change triage outcomes.
-- **Audio quality:** clipping, long silences, and unstable prosody can break user trust.
-
-VoiceQA tries to make these failure modes visible, debuggable, and easy to regression-test.
+- **Faithfulness (optional)** — semantic-only LLM-as-judge (Ollama; advisory; low confidence)
+- **History** — local SQLite (`voiceqa.db`)
 
 ## Design principles
 
@@ -46,9 +55,22 @@ VoiceQA tries to make these failure modes visible, debuggable, and easy to regre
 - **Curated eval > random corpora.** Suite manifests are committed; audio is local. You iterate on *your* failure modes.
 - **No PHI in public.** Use synthetic scripts and voices for open-source eval sets.
 
+## Who this is for
+
+- Teams building **healthcare voice agents** (or any high-stakes spoken output)
+- Teams testing **TTS / generated spoken responses** where “sounds right” matters
+- Builders who need **repeatable, local/private** evaluation workflows
+
 ## Stack
 
 Python 3.11, FastAPI, LangChain, Whisper, Ollama, scipy, soundfile, jiwer, praat-parselmouth, SpeechMOS, SQLite
+
+## Quick demo (recommended)
+
+Run the UI and try an eval suite:
+- `symptom-triage` — “should pass” baseline suite (terms + vitals)
+- `hallucination-demo` — intentional additions/omissions/contradictions (uses `audio_script`)
+- `prosody-demo` — deterministic weird pauses/pacing (uses `postprocess`)
 
 ## Setup
 
@@ -79,7 +101,7 @@ Typical workflow:
 1. Put scripts (and expected terms) in the manifest (committed)
 2. Generate local TTS WAVs (not committed) or record real audio samples
 3. Run the suite from the UI or `/eval/run`
-4. Inspect flagged clips (audio playback + JSON) and iterate
+4. Inspect flagged clips (audio playback + jump-to flags + JSON) and iterate
 
 For local regression tracking, you can save a suite baseline from the UI and compare future runs.
 Baselines are stored as `eval_set/suites/<suite_id>/baseline.local.json` and are gitignored.
@@ -141,8 +163,9 @@ curl -X POST http://localhost:8000/analyse/batch \
 ## Screenshots
 
 The UI is intentionally lightweight and local. If you publish this repo, add a screenshot/GIF of:
-- an eval suite run showing per-case audio playback
-- a FAIL/REVIEW example with flags and metrics
+- an eval suite run showing per-case audio playback + jump-to flags
+- a `hallucination-demo` case being flagged
+- a `prosody-demo` case being flagged
 
 ## Tests
 
