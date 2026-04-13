@@ -1,36 +1,151 @@
 # VoiceQA
 
-Voice Agent Quality Assurance — evaluate the spoken output quality of TTS/voice agents.
+Voice Agent Quality Assurance — a practical QA harness for **what a voice agent said** and **how it sounded**.
+
+If you’re building voice agents (especially for healthcare), you quickly run into a gap:
+most evals stop at transcripts. In real calls you also need to catch:
+- numbers and vitals that can’t be “approximately right”
+- meaning flips (negations / omissions)
+- audio issues (clipping, long silences, instability) that break trust
+
+VoiceQA is a small, local-first tool that makes these failure modes visible and regression-testable.
 
 ## What it does
 
-Accepts an audio file and expected script, runs a 6-stage analysis pipeline, and returns a structured quality report covering:
+Accepts an audio file plus the expected script, runs a **10-stage analysis pipeline**, and returns a structured quality report covering:
 
-- **Transcript accuracy** — WER, MER, word-level diff (Whisper + jiwer)
-- **Pause detection** — unnatural silences with timestamps (librosa)
-- **Audio artifacts** — clipping, DC offset, noise, pops/clicks (librosa/scipy)
-- **QA report** — score 0-100 + suggestions (Ollama, local LLM)
-- **History** — all reports saved to SQLite
+- **Transcription + confidence gate** (Whisper)
+- **Alignment spans (when available)** — word + phrase spans for timing-based checks (Whisper word timestamps)
+- **Transcript accuracy** — WER/MER/WIL + word diff (jiwer)
+- **Audio artifacts** — clipping, DC offset, high‑frequency noise, pops/clicks
+- **Pause detection** — silence gaps with timestamps
+- **Pause naturalness (alignment-based)** — within‑phrase vs between‑phrase timing gaps + speaking rate (deterministic)
+- **Prosody** — F0 mean, jitter, shimmer, HNR (Praat/Parselmouth; graceful skip)
+- **MOS prediction** — DNSMOS via SpeechMOS (graceful skip)
+- **Entity fidelity** — numbers/codes/dates mismatches
+- **Name fidelity** — proper noun/name mismatches (conservative extraction + fuzzy match)
+- **Faithfulness** — semantic-only LLM-as-judge (Ollama; graceful skip; always low confidence)
+- **QA report + verdict** — PASS / REVIEW / FAIL / LOW_CONFIDENCE
+- **History** — all reports saved to SQLite (`voiceqa.db`)
+
+If Ollama isn’t running (or models aren’t available), VoiceQA still runs end‑to‑end: the LLM steps are skipped and the QA report is generated deterministically.
+
+## Why this exists
+
+Transcript-only metrics (like WER) are helpful, but insufficient for real voice product quality:
+- **Entity safety:** “92 percent” vs “72 percent” is not a small typo.
+- **Meaning flips:** negations and omissions can change triage outcomes.
+- **Audio quality:** clipping, long silences, and unstable prosody can break user trust.
+
+VoiceQA tries to make these failure modes visible, debuggable, and easy to regression-test.
+
+## Design principles
+
+- **Deterministic first.** High-signal checks (entities, vitals, audio artifacts) should not depend on an LLM.
+- **LLM-as-judge is advisory.** Faithfulness is low-confidence by default and should not be the only safety gate.
+- **Curated eval > random corpora.** Suite manifests are committed; audio is local. You iterate on *your* failure modes.
+- **No PHI in public.** Use synthetic scripts and voices for open-source eval sets.
 
 ## Stack
 
-Python 3.11, FastAPI, LangChain, Whisper, Ollama, librosa, scipy, jiwer, SQLite
+Python 3.11, FastAPI, LangChain, Whisper, Ollama, scipy, soundfile, jiwer, praat-parselmouth, SpeechMOS, SQLite
 
 ## Setup
 
-1. Create venv with Python 3.11
-2. pip install -r requirements.txt
-3. Install Ollama: brew install ollama && ollama serve && ollama pull phi3.5
-4. cp .env.example .env
-5. uvicorn main:app --reload --port 8000
+1. Create/activate a Python 3.11 venv (example: `source ~/venvs/voiceqa/bin/activate`)
+2. `pip install -r requirements.txt`
+3. Optional (recommended): install and run Ollama
+   - `brew install ollama`
+   - `ollama serve`
+   - `ollama pull phi3.5`
+   - `ollama pull llama3.2`
+4. `cp .env.example .env` (or edit `.env` directly)
+5. Run the API: `uvicorn main:app --reload --port 8000`
+
+## Quickstart (UI)
+
+```bash
+source ~/venvs/voiceqa/bin/activate
+uvicorn main:app --reload --port 8000
+```
+
+Open `http://127.0.0.1:8000/ui`.
+
+## Curated eval suites (recommended)
+
+Suites live in `eval_set/suites/<suite_id>/manifest.jsonl`.
+
+Typical workflow:
+1. Put scripts (and expected terms) in the manifest (committed)
+2. Generate local TTS WAVs (not committed) or record real audio samples
+3. Run the suite from the UI or `/eval/run`
+4. Inspect flagged clips (audio playback + JSON) and iterate
+
+For local regression tracking, you can save a suite baseline from the UI and compare future runs.
+Baselines are stored as `eval_set/suites/<suite_id>/baseline.local.json` and are gitignored.
+
+### Demo: generate a suite with ElevenLabs
+
+This is the fastest way to get a realistic eval loop without committing audio.
+
+```bash
+source ~/venvs/voiceqa/bin/activate
+export ELEVENLABS_API_KEY="..."        # do not commit
+export ELEVENLABS_VOICE_ID="..."       # see generator output for options
+python tools/generate_eval_audio_elevenlabs.py --suite symptom-triage
+```
+
+Then run `symptom-triage` from `http://127.0.0.1:8000/ui`.
+
+## Endpoints
+
+- `GET /health`
+- `GET /ui` — web UI
+- `POST /analyse` — analyse one audio file
+- `POST /analyse/batch` — analyse many audio files in one request (paired `audio_files[i]` + `expected_scripts[i]`)
+- `GET /eval/suites` — list available eval suites from `eval_set/suites/`
+- `POST /eval/run` — run an eval suite (server-side, on local audio files)
+- `GET /eval/audio/{suite_id}/{path}` — serve eval audio clips to the UI
+- `POST /eval/baseline/save` — save a local baseline snapshot
+- `POST /eval/baseline/compare` — compare current run to baseline
 
 ## Usage
 
+Single file:
+
+```bash
 curl -X POST http://localhost:8000/analyse \
   -F "audio=@your_tts_output.wav" \
   -F "expected_script=Your expected script here"
+```
+
+Batch:
+
+```bash
+curl -X POST http://localhost:8000/analyse/batch \
+  -F "audio_files=@audio1.wav" -F "audio_files=@audio2.wav" \
+  -F "expected_scripts=Expected for audio 1" -F "expected_scripts=Expected for audio 2"
+```
 
 ## Recommended models
 
-- Transcription: Whisper small (default) or large-v3 for better accuracy
-- LLM report: phi3.5 via Ollama (best local quality/size tradeoff)
+- Transcription: Whisper `small` (default) or `large-v3` for better accuracy (slower)
+- QA report + faithfulness: `phi3.5` / `llama3.2` via Ollama (see `.env`)
+
+## Notes for healthcare
+
+- Use **synthetic test scripts** in public repos (no PHI).
+- Treat `expected_terms` (rare symptoms + medication names) as “must preserve” and curate them into suites (supports `criticality`).
+- Vitals are checked deterministically so “one eighty over one ten” still matches `180/110`.
+
+## Screenshots
+
+The UI is intentionally lightweight and local. If you publish this repo, add a screenshot/GIF of:
+- an eval suite run showing per-case audio playback
+- a FAIL/REVIEW example with flags and metrics
+
+## Tests
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests -v
+```

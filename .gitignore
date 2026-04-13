@@ -8,3 +8,4 @@ uploads/
 *.m4a
 .DS_Store
 venvs/
+eval_set/**/baseline.local.json

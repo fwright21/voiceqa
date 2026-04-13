@@ -1,0 +1,6 @@
+{"id":"hc-001-intro","audio_path":"audio/hc-001-intro.wav","expected_script":"Hello, this is Dr. Nguyen calling from St. Marys Clinic about your appointment.","expected_names":["Nguyen","St. Marys Clinic"],"tags":["healthcare","names","intro"],"notes":"Proper noun + org name in one sentence."}
+{"id":"hc-002-date-time","audio_path":"audio/hc-002-date-time.wav","expected_script":"Your appointment is scheduled for April 17, 2026 at 2:30 PM.","expected_names":[],"tags":["healthcare","dates","times"],"notes":"Date + time; verify entity fidelity."}
+{"id":"hc-003-med-dose","audio_path":"audio/hc-003-med-dose.wav","expected_script":"Take amoxicillin 500 milligrams twice a day for 7 days.","expected_names":["amoxicillin"],"tags":["healthcare","medication","dosage"],"notes":"Medication name + dosage + duration. Consider making name fidelity strict for meds in future."}
+{"id":"hc-004-negation","audio_path":"audio/hc-004-negation.wav","expected_script":"You should not take ibuprofen today because of your recent procedure.","expected_names":["ibuprofen"],"tags":["healthcare","negation","safety"],"notes":"Meaning flip risk: 'should not' is critical."}
+{"id":"hc-005-phone","audio_path":"audio/hc-005-phone.wav","expected_script":"If you have questions, call 1-800-555-0199.","expected_names":[],"tags":["healthcare","phone","entities"],"notes":"Phone number fidelity."}
+

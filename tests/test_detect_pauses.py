@@ -1,17 +1,19 @@
-from tools.detect_pauses import detect_pauses
+from pathlib import Path
 
-result = detect_pauses.invoke({"audio_path": "test_audio.wav"})
 
-print("=== AUDIO INFO ===")
-print(f"Duration: {result['audio_duration_sec']}s")
+def test_detect_pauses_returns_expected_shape():
+    from tools.detect_pauses import detect_pauses
 
-print("\n=== PAUSES ===")
-if result['pause_count'] == 0:
-    print("No unnatural pauses detected")
-else:
-    for p in result['pauses']:
-        print(f"  [{p['start_sec']}s → {p['end_sec']}s] duration: {p['duration_sec']}s")
+    audio_path = str(Path(__file__).resolve().parent / "test_audio.wav")
+    result = detect_pauses.invoke({"audio_path": audio_path})
 
-print(f"\nTotal pause time: {result['total_pause_time_sec']}s")
-print(f"Longest pause:    {result['longest_pause_sec']}s")
-print(f"Pause count:      {result['pause_count']}")
+    assert set([
+        "pauses",
+        "pause_count",
+        "total_pause_time_sec",
+        "longest_pause_sec",
+        "audio_duration_sec",
+    ]).issubset(result.keys())
+    assert isinstance(result["pauses"], list)
+    assert isinstance(result["pause_count"], int)
+    assert isinstance(result["audio_duration_sec"], (int, float))
