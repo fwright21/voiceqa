@@ -180,12 +180,181 @@ function renderTopFailures(items) {
   }
 }
 
+function renderSummaryStrip(summary) {
+  const container = $("eval-summary-strip");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!summary) return;
+  const items = [
+    ["PASS", summary.pass || 0, "pass"],
+    ["REVIEW", summary.review || 0, "review"],
+    ["FAIL", summary.fail || 0, "fail"],
+    ["LOW CONF", summary.low_confidence || 0, "low"],
+  ];
+  for (const [label, value, cls] of items) {
+    const card = document.createElement("div");
+    card.className = `summary-tile ${cls}`;
+    const num = document.createElement("div");
+    num.className = "summary-tile-value";
+    num.textContent = value;
+    const text = document.createElement("div");
+    text.className = "summary-tile-label";
+    text.textContent = label;
+    card.appendChild(num);
+    card.appendChild(text);
+    container.appendChild(card);
+  }
+}
+
 function verdictBadgeClass(verdict) {
   if (verdict === "PASS") return "pass";
   if (verdict === "REVIEW") return "review";
   if (verdict === "FAIL") return "fail";
   if (verdict === "LOW_CONFIDENCE") return "low";
   return "";
+}
+
+function humanIssue(issue) {
+  const text = String(issue || "");
+  const lower = text.toLowerCase();
+  if (lower.includes("vitals mismatch")) return "Vital mismatch detected";
+  if (lower.includes("critical term")) return "Critical symptom/medication term changed or missed";
+  if (lower.includes("term mismatch")) return "Must-preserve term changed or missed";
+  if (lower.includes("entity mismatch")) return "Number, code, or date mismatch";
+  if (lower.includes("name mismatch")) return "Name or proper noun mismatch";
+  if (lower.includes("mos score")) return "Voice naturalness score is low";
+  if (lower.includes("faithfulness")) return "Possible meaning drift";
+  if (lower.includes("pause")) return "Suspicious pause pattern";
+  if (lower.includes("artifact") || lower.includes("clipping")) return "Audio artifact detected";
+  return text;
+}
+
+function appendCaseSection(body, title, nodeOrText, extraClass = "") {
+  const section = document.createElement("div");
+  section.className = `case-section ${extraClass}`.trim();
+  const heading = document.createElement("div");
+  heading.className = "case-section-h";
+  heading.textContent = title;
+  section.appendChild(heading);
+  if (typeof nodeOrText === "string") {
+    const text = document.createElement("div");
+    text.className = "case-section-text";
+    text.textContent = nodeOrText;
+    section.appendChild(text);
+  } else {
+    section.appendChild(nodeOrText);
+  }
+  body.appendChild(section);
+  return section;
+}
+
+function appendScriptDetails(body, title, text) {
+  if (!text) return;
+  const details = document.createElement("details");
+  details.open = false;
+  const sum = document.createElement("summary");
+  sum.textContent = title;
+  sum.style.cursor = "pointer";
+  const txt = document.createElement("div");
+  txt.className = "case-script";
+  txt.textContent = text;
+  details.appendChild(sum);
+  details.appendChild(txt);
+  body.appendChild(details);
+}
+
+function renderChipRow(chips) {
+  const row = document.createElement("div");
+  row.className = "chip-row";
+  for (const chip of chips) {
+    const el = document.createElement("span");
+    el.className = "chip";
+    el.textContent = chip;
+    row.appendChild(el);
+  }
+  return row;
+}
+
+function caseMetricChips(highlights) {
+  if (!highlights) return [];
+  const h = highlights;
+  const chips = [];
+  if (h.vitals_mismatch_count) chips.push(`Vitals mismatches: ${h.vitals_mismatch_count}`);
+  if (h.term_mismatch_count) chips.push(`Term mismatches: ${h.term_mismatch_count}`);
+  if (h.entity_mismatch_count) chips.push(`Entity mismatches: ${h.entity_mismatch_count}`);
+  if (h.name_mismatch_count) chips.push(`Name mismatches: ${h.name_mismatch_count}`);
+  if (h.faithfulness_violation_count) chips.push(`Meaning drift signals: ${h.faithfulness_violation_count}`);
+  if (h.mos_score !== undefined && h.mos_score !== null) chips.push(`Voice naturalness: ${h.mos_score}`);
+  if (h.longest_pause_sec) chips.push(`Longest pause: ${h.longest_pause_sec}s`);
+  if (h.max_within_phrase_gap_sec) chips.push(`Within-phrase gap: ${h.max_within_phrase_gap_sec}s`);
+  if (h.speaking_rate_wps) chips.push(`Speaking rate: ${h.speaking_rate_wps} wps`);
+  if (h.pause_flag_count) chips.push(`Pause flags: ${h.pause_flag_count}`);
+  if (h.artifact_count) chips.push(`Audio artifacts: ${h.artifact_count}`);
+  if (h.wer !== undefined && h.wer !== null) chips.push(`Transcript drift: WER ${Number(h.wer).toFixed(3)}`);
+  return chips;
+}
+
+function appendDiffWords(container, diffOps, side, fallback) {
+  if (!Array.isArray(diffOps) || diffOps.length === 0) {
+    container.textContent = fallback || "—";
+    return;
+  }
+  let wrote = false;
+  for (const op of diffOps) {
+    const raw = side === "expected" ? op.expected : op.actual;
+    const words = String(raw || "").split(/\s+/).filter(Boolean);
+    if (!words.length) continue;
+    const span = document.createElement("span");
+    let cls = "diff-token";
+    if (op.op === "equal") cls += " diff-equal";
+    else if (side === "expected" && (op.op === "delete" || op.op === "replace")) cls += " diff-missing";
+    else if (side === "actual" && (op.op === "insert" || op.op === "replace")) cls += " diff-added";
+    else cls += " diff-change";
+    span.className = cls;
+    span.textContent = words.join(" ");
+    container.appendChild(span);
+    container.appendChild(document.createTextNode(" "));
+    wrote = true;
+  }
+  if (!wrote) container.textContent = fallback || "—";
+}
+
+function renderTranscriptComparison(container, expected, transcript, diffOps) {
+  if (!container) return;
+  container.innerHTML = "";
+  if (!expected && !transcript) {
+    container.textContent = "—";
+    return;
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "transcript-grid";
+
+  const expectedBox = document.createElement("div");
+  expectedBox.className = "transcript-box";
+  const expectedLabel = document.createElement("div");
+  expectedLabel.className = "transcript-label";
+  expectedLabel.textContent = "Expected";
+  const expectedLine = document.createElement("div");
+  expectedLine.className = "transcript-line";
+  appendDiffWords(expectedLine, diffOps, "expected", expected || "—");
+  expectedBox.appendChild(expectedLabel);
+  expectedBox.appendChild(expectedLine);
+
+  const actualBox = document.createElement("div");
+  actualBox.className = "transcript-box";
+  const actualLabel = document.createElement("div");
+  actualLabel.className = "transcript-label";
+  actualLabel.textContent = "Heard";
+  const actualLine = document.createElement("div");
+  actualLine.className = "transcript-line";
+  appendDiffWords(actualLine, diffOps, "actual", transcript || "—");
+  actualBox.appendChild(actualLabel);
+  actualBox.appendChild(actualLine);
+
+  grid.appendChild(expectedBox);
+  grid.appendChild(actualBox);
+  container.appendChild(grid);
 }
 
 function renderCases(reports) {
@@ -264,63 +433,21 @@ function renderCases(reports) {
     const body = document.createElement("div");
     body.className = "case-body";
 
-    if (r.expected_script) {
-      const details = document.createElement("details");
-      details.open = false;
-      const sum = document.createElement("summary");
-      sum.textContent = "Expected script";
-      sum.style.cursor = "pointer";
-      const txt = document.createElement("div");
-      txt.className = "case-script";
-      txt.textContent = r.expected_script;
-      details.appendChild(sum);
-      details.appendChild(txt);
-      body.appendChild(details);
-    }
-
-    if (r.transcript) {
-      const details = document.createElement("details");
-      details.open = false;
-      const sum = document.createElement("summary");
-      sum.textContent = "Transcript";
-      sum.style.cursor = "pointer";
-      const txt = document.createElement("div");
-      txt.className = "case-script";
-      txt.textContent = r.transcript;
-      details.appendChild(sum);
-      details.appendChild(txt);
-      body.appendChild(details);
-    }
-
     const failures = (r.failures || []).slice(0, 6);
     if (failures.length) {
-      const flags = document.createElement("div");
-      flags.className = "case-flags";
-      flags.textContent = `Flags: ${failures.join(" · ")}`;
-      body.appendChild(flags);
+      const ul = document.createElement("ul");
+      ul.className = "issue-list";
+      for (const failure of failures) {
+        const li = document.createElement("li");
+        li.textContent = humanIssue(failure);
+        ul.appendChild(li);
+      }
+      appendCaseSection(body, "Top issues", ul, "case-issues");
     }
 
-    if (r.highlights) {
-      const h = r.highlights;
-      const parts = [];
-      if (h.wer !== undefined && h.wer !== null) parts.push(`WER=${Number(h.wer).toFixed(3)}`);
-      if (h.vitals_mismatch_count) parts.push(`Vitals mismatches=${h.vitals_mismatch_count}`);
-      if (h.term_mismatch_count) parts.push(`Term mismatches=${h.term_mismatch_count}`);
-      if (h.entity_mismatch_count) parts.push(`Entity mismatches=${h.entity_mismatch_count}`);
-      if (h.name_mismatch_count) parts.push(`Name mismatches=${h.name_mismatch_count}`);
-      if (h.faithfulness_violation_count) parts.push(`Faithfulness violations=${h.faithfulness_violation_count}`);
-      if (h.mos_score !== undefined && h.mos_score !== null) parts.push(`MOS=${h.mos_score}`);
-      if (h.longest_pause_sec) parts.push(`Longest pause=${h.longest_pause_sec}s`);
-      if (h.max_within_phrase_gap_sec) parts.push(`Max within-phrase gap=${h.max_within_phrase_gap_sec}s`);
-      if (h.speaking_rate_wps) parts.push(`Rate=${h.speaking_rate_wps} wps`);
-      if (h.pause_flag_count) parts.push(`Pause flags=${h.pause_flag_count}`);
-      if (h.artifact_count) parts.push(`Artifacts=${h.artifact_count}`);
-      if (parts.length) {
-        const flags = document.createElement("div");
-        flags.className = "case-flags";
-        flags.textContent = `Highlights: ${parts.join(" · ")}`;
-        body.appendChild(flags);
-      }
+    const metricChips = caseMetricChips(r.highlights);
+    if (metricChips.length) {
+      appendCaseSection(body, "Checks that fired", renderChipRow(metricChips), "case-metrics");
     }
 
     if (r.audio_rel_path) {
@@ -331,36 +458,34 @@ function renderCases(reports) {
       audio.preload = "none";
       audio.src = `/eval/audio/${encodeURIComponent(r.suite_id || $("eval-suite").value)}/${r.audio_rel_path}`;
       audioWrap.appendChild(audio);
-      body.appendChild(audioWrap);
+      appendCaseSection(body, "Audio review", audioWrap, "case-review");
 
       const pauseFlags = r.highlights?.pause_flags || [];
       if (Array.isArray(pauseFlags) && pauseFlags.length) {
-        const list = document.createElement("div");
-        list.className = "case-flags";
-        list.textContent = "Pause flags (click to jump):";
-        body.appendChild(list);
+        const jumpList = document.createElement("div");
+        jumpList.className = "jump-list";
 
         for (const f of pauseFlags) {
-          const row = document.createElement("div");
-          row.className = "case-flags";
           const start = f.start_sec ?? f.gap_start_sec ?? f.gap_start ?? null;
           const dur = f.duration_sec ?? f.gap_sec ?? null;
-          const label = `${f.type || "pause"} · ${dur ? dur + "s" : "—"} · ${start !== null ? "@" + start + "s" : ""}`.trim();
+          const label = `${f.type || "pause"} · ${dur ? dur + "s" : "—"} · ${start !== null ? fmtTime(start) : ""}`.trim();
           const btn = document.createElement("button");
           btn.type = "button";
           btn.className = "btn secondary";
-          btn.style.padding = "6px 10px";
           btn.textContent = `Jump: ${label}`;
           btn.addEventListener("click", () => {
             const t = Number(start ?? 0);
             audio.currentTime = Math.max(0, t - 0.2);
             audio.scrollIntoView({ block: "nearest", behavior: "smooth" });
           });
-          row.appendChild(btn);
-          body.appendChild(row);
+          jumpList.appendChild(btn);
         }
+        appendCaseSection(body, "Flagged moments", jumpList, "case-moments");
       }
     }
+
+    appendScriptDetails(body, "Expected script", r.expected_script);
+    appendScriptDetails(body, "Transcript", r.transcript);
 
     const actions = document.createElement("div");
     actions.className = "case-actions";
@@ -401,9 +526,10 @@ async function runSuite() {
   setJson($("eval-json"), "Running suite (this can take a while if audio exists)...");
   $("eval-top-failures").innerHTML = "";
   $("eval-cases").innerHTML = "";
+  renderSummaryStrip(null);
   renderBaselineDelta(null);
   setHidden($("eval-secondary-actions"), true);
-  setHidden($("eval-verdict-help"), true);
+  setHidden($("eval-review-guidance"), true);
 
   try {
     const includeReports = $("eval-include-reports").checked;
@@ -426,20 +552,22 @@ async function runSuite() {
       `${summary.pass || 0} PASS · ${summary.review || 0} REVIEW · ${summary.fail || 0} FAIL · ${summary.low_confidence || 0} LOW_CONF`
     );
     setScore($("eval-avg-score"), summary.avg_score);
+    renderSummaryStrip(summary);
     renderTopFailures(summary.top_failures || []);
     setJson($("eval-json"), data);
 
     // Reveal secondary actions once a run exists.
     setHidden($("eval-secondary-actions"), false);
     const help = verdictHelpText("REVIEW");
-    const helpEl = $("eval-verdict-help");
+    const helpEl = $("eval-review-guidance");
     if (helpEl) {
-      helpEl.textContent = help + " Suite summary shows counts; use case cards for details.";
+      helpEl.textContent = help + " Review guidance: start with FAIL and REVIEW cases, then compare against baseline if needed.";
       setHidden(helpEl, false);
     }
   } catch (e) {
     setJson($("eval-json"), { error: String(e) });
     setSummary($("eval-summary"), "Error");
+    renderSummaryStrip(null);
   } finally {
     $("eval-run").disabled = false;
   }
@@ -499,6 +627,8 @@ async function runSingle(formEvent) {
   setScore($("single-score"), null);
   setJson($("single-json"), "Uploading and analysing...");
   setHidden($("single-verdict-help"), true);
+  setHidden($("single-download-json"), true);
+  setHidden($("single-copy-json"), true);
 
   try {
     const fd = new FormData();
@@ -510,6 +640,8 @@ async function runSingle(formEvent) {
     setVerdict($("single-verdict"), data.verdict);
     setScore($("single-score"), data.score);
     setJson($("single-json"), data);
+    setHidden($("single-download-json"), false);
+    setHidden($("single-copy-json"), false);
 
     const helpEl = $("single-verdict-help");
     if (helpEl) {
@@ -518,7 +650,7 @@ async function runSingle(formEvent) {
     }
 
     // Why flagged
-    renderList($("single-failures"), (data.failures || []).slice(0, 10));
+    renderList($("single-failures"), (data.failures || []).map(humanIssue).slice(0, 10));
 
     // Flagged moments: pauses + pause_naturalness + pops/clicks
     const moments = [];
@@ -547,29 +679,19 @@ async function runSingle(formEvent) {
     }
     renderList($("single-moments"), moments);
 
-    // Transcript comparison: show top non-equal diff ops
     const diffOps = data?.metrics?.accuracy?.diff_ops || [];
-    const diffs = [];
-    if (Array.isArray(diffOps)) {
-      for (const op of diffOps) {
-        if (!op || op.op === "equal") continue;
-        diffs.push(`${op.op}: expected="${op.expected}" actual="${op.actual}"`);
-        if (diffs.length >= 6) break;
-      }
-    }
-    renderList($("single-diff"), diffs);
+    renderTranscriptComparison($("single-diff"), script, data.transcript || "", diffOps);
 
-    // Key metrics
     const m = [];
     const acc = data?.metrics?.accuracy || {};
-    if (acc?.wer !== undefined) m.push(`WER: ${acc.wer}`);
-    if (acc?.accuracy_pct !== undefined) m.push(`Accuracy: ${acc.accuracy_pct}%`);
+    if (acc?.wer !== undefined) m.push(`Transcript error: WER ${acc.wer}`);
+    if (acc?.accuracy_pct !== undefined) m.push(`Transcript match: ${acc.accuracy_pct}%`);
     const mos = data?.metrics?.mos?.mos_score;
-    if (mos !== undefined && mos !== null) m.push(`MOS: ${mos}`);
+    if (mos !== undefined && mos !== null) m.push(`Voice naturalness: ${mos}`);
     const tc = data?.metrics?.transcript_confidence || data?.transcript_confidence;
     if (tc) m.push(`Transcript confidence: ${tc}`);
     const ent = data?.metrics?.entity_fidelity || {};
-    if (ent?.mismatch_count) m.push(`Entity mismatches: ${ent.mismatch_count}`);
+    if (ent?.mismatch_count) m.push(`Number/code/date mismatches: ${ent.mismatch_count}`);
     renderList($("single-metrics"), m);
   } catch (e) {
     setVerdict($("single-verdict"), "Error");
@@ -637,6 +759,8 @@ $("single-clear").addEventListener("click", () => {
   setJson($("single-json"), "Run an analysis to see output.");
   lastSingleResult = null;
   setHidden($("single-verdict-help"), true);
+  setHidden($("single-download-json"), true);
+  setHidden($("single-copy-json"), true);
   $("single-failures").textContent = "Run an analysis to see results.";
   $("single-moments").textContent = "—";
   $("single-diff").textContent = "—";

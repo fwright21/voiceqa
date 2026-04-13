@@ -28,8 +28,8 @@
             <div class="kicker">Quick start</div>
             <h1 class="hero-title">Catch voice agent failures transcript evals miss.</h1>
             <div class="hero-subtitle">
-              VoiceQA checks both <strong>content fidelity</strong> and <strong>delivery quality</strong> — including exact numbers, meaning flips,
-              pauses, clipping, and regressions across suites.
+              VoiceQA checks both <strong>content fidelity</strong> and <strong>delivery quality</strong> — from exact numbers and meaning flips
+              to pauses, clipping, and regressions across eval suites.
             </div>
           </div>
           <div class="hero-actions">
@@ -65,15 +65,15 @@
 
       <main class="content">
         <section class="panel active" id="tab-single" role="tabpanel">
-          <h2>Analyse one audio file</h2>
+          <h2>Analyse one clip</h2>
           <p class="muted">
-            Upload an audio file and the expected script. VoiceQA runs fidelity + audio checks and returns a verdict with flagged issues.
+            Upload an audio clip and the expected script. VoiceQA runs fidelity + audio checks and returns a verdict with flagged issues.
           </p>
 
           <form id="single-form" class="card">
             <div class="row">
               <label class="label">
-                Audio file
+                Audio clip
                 <input id="single-audio" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg" required />
               </label>
             </div>
@@ -88,7 +88,6 @@
             <div class="row actions">
               <button class="btn" type="submit">Run Analysis</button>
               <button class="btn secondary" type="button" id="single-clear">Clear</button>
-              <button class="btn secondary" type="button" id="single-download-json">Download JSON</button>
             </div>
 
             <div class="row">
@@ -111,14 +110,8 @@
                   <div id="single-score" class="score-value">—</div>
                 </div>
               </div>
-              <div class="toolbar">
-                <div class="toolbar-left">
-                  <button class="btn secondary" type="button" id="single-copy-json">Copy JSON</button>
-                </div>
-              </div>
-
               <div class="section">
-                <div class="section-h">Why it was flagged</div>
+                <div class="section-h">Top issues</div>
                 <div id="single-failures" class="kv">Run an analysis to see results.</div>
               </div>
 
@@ -133,12 +126,16 @@
               </div>
 
               <div class="section">
-                <div class="section-h">Key metrics</div>
+                <div class="section-h">Review metrics</div>
                 <div id="single-metrics" class="kv muted">—</div>
               </div>
 
               <details class="section">
                 <summary class="section-h">Raw JSON</summary>
+                <div class="raw-actions">
+                  <button class="btn secondary hidden" type="button" id="single-copy-json">Copy JSON</button>
+                  <button class="btn secondary hidden" type="button" id="single-download-json">Download JSON</button>
+                </div>
                 <pre id="single-json" class="json">Run an analysis to see output.</pre>
               </details>
             </div>
@@ -148,7 +145,7 @@
         <section class="panel" id="tab-eval" role="tabpanel">
           <h2>Run an eval suite</h2>
           <p class="muted">
-            Suites live in <code>eval_set/suites/</code>. Manifests are committed; audio files are usually local-only.
+            Run a curated eval suite to review failures, compare against a baseline, and track regressions over time.
           </p>
 
           <div class="card">
@@ -160,8 +157,8 @@
             </div>
             <div class="row">
               <div class="hint">
-                Suite manifests can include <code>expected_terms</code> for hard symptom/medication words
-                (e.g. dyspnea, hemoptysis, levetiracetam). These are checked via <code>term_fidelity</code>.
+                Suites are loaded from <code>eval_set/suites/</code>; manifests are committed and audio usually stays local.
+                Must-preserve terms like dyspnea, hemoptysis, and levetiracetam are flagged if altered or missed.
               </div>
             </div>
 
@@ -233,17 +230,21 @@
                 <div>
                   <div class="kicker">Summary</div>
                   <div id="eval-summary" class="summary">—</div>
-                  <div id="eval-verdict-help" class="hint" style="margin-top:10px; display:none;"></div>
+                  <div id="eval-review-guidance" class="hint" style="margin-top:10px; display:none;"></div>
                 </div>
                 <div class="score">
                   <div class="kicker">Avg score</div>
                   <div id="eval-avg-score" class="score-value">—</div>
                 </div>
               </div>
+              <div id="eval-summary-strip" class="summary-strip"></div>
               <div id="eval-baseline-delta" class="hint" style="display:none;"></div>
               <div id="eval-top-failures" class="top-failures"></div>
               <div id="eval-cases" class="cases"></div>
-              <pre id="eval-json" class="json">Load suites to begin.</pre>
+              <details class="section">
+                <summary class="section-h">Raw JSON</summary>
+                <pre id="eval-json" class="json">Load suites to begin.</pre>
+              </details>
             </div>
           </div>
         </section>
