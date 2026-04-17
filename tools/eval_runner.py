@@ -58,7 +58,9 @@ def load_suite(suite_id: str) -> Tuple[Path, List[EvalCase]]:
         raise EvalError(f"Suite is missing manifest.jsonl: {manifest_path}")
 
     cases: List[EvalCase] = []
-    for i, line in enumerate(manifest_path.read_text(encoding="utf-8").splitlines(), start=1):
+    for i, line in enumerate(
+        manifest_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         raw = line.strip()
         if not raw or raw.startswith("#"):
             continue
@@ -79,17 +81,23 @@ def load_suite(suite_id: str) -> Tuple[Path, List[EvalCase]]:
 
         # Optional: allow a separate audio_script for synthetic "mismatch" / hallucination demos.
         # If omitted, audio_script defaults to expected_script.
-        audio_script = str(obj.get("audio_script") or obj.get("actual_script") or expected_script).strip()
+        audio_script = str(
+            obj.get("audio_script") or obj.get("actual_script") or expected_script
+        ).strip()
         if not audio_script:
             audio_script = expected_script
 
         voice_settings = obj.get("voice_settings")
         if voice_settings is not None and not isinstance(voice_settings, dict):
-            raise EvalError(f"voice_settings must be an object for case {case_id} (line {i})")
+            raise EvalError(
+                f"voice_settings must be an object for case {case_id} (line {i})"
+            )
 
         postprocess = obj.get("postprocess")
         if postprocess is not None and not isinstance(postprocess, dict):
-            raise EvalError(f"postprocess must be an object for case {case_id} (line {i})")
+            raise EvalError(
+                f"postprocess must be an object for case {case_id} (line {i})"
+            )
 
         expected_names = obj.get("expected_names") or []
         ignore_names = obj.get("ignore_names") or []
@@ -131,7 +139,7 @@ def summarize_reports(reports: List[Dict[str, Any]]) -> dict:
         if isinstance(score, (int, float)):
             scores.append(float(score))
 
-        for reason in (r.get("failures") or []):
+        for reason in r.get("failures") or []:
             failure_reasons[str(reason)] = failure_reasons.get(str(reason), 0) + 1
 
     avg_score = round(sum(scores) / len(scores), 2) if scores else None
@@ -148,92 +156,118 @@ def summarize_reports(reports: List[Dict[str, Any]]) -> dict:
     }
 
 
-def run_suite(suite_id: str) -> dict:
-    """
-    Run a suite against the local on-disk audio files.
-
-    Returns: { suite_id, duration_sec, summary, reports }
-    """
-    suite_dir, cases = load_suite(suite_id)
-
+def _run_single_case(case: EvalCase, suite_dir: Path) -> Dict[str, Any]:
     from agent import run_analysis
     from tools.check_name_fidelity import check_name_fidelity
     from tools.check_term_fidelity import check_term_fidelity
     from tools.check_vitals_fidelity import check_vitals_fidelity
 
+    if not case.audio_path.exists():
+        return {
+            "case_id": case.case_id,
+            "audio_path": str(case.audio_path),
+            "verdict": "FAIL",
+            "score": 0,
+            "failures": [f"Missing audio file: {case.audio_path}"],
+            "error": "missing_audio",
+        }
+
+    report = run_analysis(
+        audio_path=str(case.audio_path),
+        expected_script=case.expected_script,
+    )
+
+    if case.expected_names or case.ignore_names:
+        transcript = report.get("transcript") or ""
+        name_result = check_name_fidelity.func(
+            expected=case.expected_script,
+            transcript=transcript,
+            expected_names=case.expected_names or None,
+            ignore_names=case.ignore_names or None,
+        )
+        metrics = report.get("metrics") or {}
+        metrics["name_fidelity"] = name_result
+        report["metrics"] = metrics
+
+    if case.expected_terms or case.ignore_terms:
+        transcript = report.get("transcript") or ""
+        term_result = check_term_fidelity.func(
+            transcript=transcript,
+            expected_terms=case.expected_terms,
+            ignore_terms=case.ignore_terms or None,
+        )
+        metrics = report.get("metrics") or {}
+        metrics["term_fidelity"] = term_result
+        report["metrics"] = metrics
+
+    vitals_result = check_vitals_fidelity.func(
+        expected=case.expected_script,
+        transcript=report.get("transcript") or "",
+    )
+    if (vitals_result.get("vitals_count") or 0) > 0:
+        metrics = report.get("metrics") or {}
+        metrics["vitals_fidelity"] = vitals_result
+        report["metrics"] = metrics
+
+    report["case_id"] = case.case_id
+    report["audio_path"] = str(case.audio_path)
+    try:
+        report["audio_rel_path"] = str(case.audio_path.relative_to(suite_dir))
+    except Exception:
+        report["audio_rel_path"] = None
+    report["tags"] = case.tags
+    report["expected_script"] = case.expected_script
+    report["expected_names"] = case.expected_names
+    report["ignore_names"] = case.ignore_names
+    report["expected_terms"] = case.expected_terms
+    report["ignore_terms"] = case.ignore_terms
+
+    report = _apply_eval_overrides(report)
+    return report
+
+
+def run_suite(suite_id: str, max_workers: int | None = None) -> dict:
+    """
+    Run a suite against the local on-disk audio files.
+
+    Args:
+        suite_id: The suite to run
+        max_workers: Max parallel workers (default: CPU count)
+
+    Returns: { suite_id, duration_sec, summary, reports }
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    suite_dir, cases = load_suite(suite_id)
+
     started = time.time()
     reports: List[Dict[str, Any]] = []
 
-    for case in cases:
-        if not case.audio_path.exists():
-            reports.append(
-                {
-                    "case_id": case.case_id,
-                    "audio_path": str(case.audio_path),
-                    "verdict": "FAIL",
-                    "score": 0,
-                    "failures": [f"Missing audio file: {case.audio_path}"],
-                    "error": "missing_audio",
-                }
-            )
-            continue
+    if max_workers is None:
+        max_workers = 4  # Reduced to avoid memory issues
 
-        report = run_analysis(
-            audio_path=str(case.audio_path),
-            expected_script=case.expected_script,
-        )
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_run_single_case, case, suite_dir): case for case in cases
+        }
+        for future in as_completed(futures):
+            try:
+                report = future.result()
+                reports.append(report)
+            except Exception as exc:
+                case = futures[future]
+                reports.append(
+                    {
+                        "case_id": case.case_id,
+                        "audio_path": str(case.audio_path),
+                        "verdict": "FAIL",
+                        "score": 0,
+                        "failures": [f"Execution error: {exc}"],
+                        "error": "execution_error",
+                    }
+                )
 
-        # Override name check with per-case allow/ignore lists (if provided).
-        if case.expected_names or case.ignore_names:
-            transcript = report.get("transcript") or ""
-            name_result = check_name_fidelity.func(
-                expected=case.expected_script,
-                transcript=transcript,
-                expected_names=case.expected_names or None,
-                ignore_names=case.ignore_names or None,
-            )
-            metrics = report.get("metrics") or {}
-            metrics["name_fidelity"] = name_result
-            report["metrics"] = metrics
-
-        if case.expected_terms or case.ignore_terms:
-            transcript = report.get("transcript") or ""
-            term_result = check_term_fidelity.func(
-                transcript=transcript,
-                expected_terms=case.expected_terms,
-                ignore_terms=case.ignore_terms or None,
-            )
-            metrics = report.get("metrics") or {}
-            metrics["term_fidelity"] = term_result
-            report["metrics"] = metrics
-
-        # Vitals fidelity is auto-extracted from expected_script; only attach when relevant.
-        vitals_result = check_vitals_fidelity.func(
-            expected=case.expected_script,
-            transcript=report.get("transcript") or "",
-        )
-        if (vitals_result.get("vitals_count") or 0) > 0:
-            metrics = report.get("metrics") or {}
-            metrics["vitals_fidelity"] = vitals_result
-            report["metrics"] = metrics
-
-        report["case_id"] = case.case_id
-        report["audio_path"] = str(case.audio_path)
-        try:
-            report["audio_rel_path"] = str(case.audio_path.relative_to(suite_dir))
-        except Exception:
-            report["audio_rel_path"] = None
-        report["tags"] = case.tags
-        report["expected_script"] = case.expected_script
-        report["expected_names"] = case.expected_names
-        report["ignore_names"] = case.ignore_names
-        report["expected_terms"] = case.expected_terms
-        report["ignore_terms"] = case.ignore_terms
-
-        # Eval-only deterministic overrides (suite runs only).
-        report = _apply_eval_overrides(report)
-        reports.append(report)
-
+    reports.sort(key=lambda r: r.get("case_id", ""))
     duration_sec = round(time.time() - started, 3)
     return {
         "suite_id": suite_id,
@@ -275,17 +309,31 @@ def compact_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "name_mismatches": _mismatch_list(name_fid),
         "term_mismatch_count": term.get("mismatch_count"),
         "term_mismatches": _mismatch_list(term),
-        "term_critical_mismatches": (term.get("critical_mismatch_count") if isinstance(term, dict) else None),
+        "term_critical_mismatches": (
+            term.get("critical_mismatch_count") if isinstance(term, dict) else None
+        ),
         "vitals_mismatch_count": vitals.get("mismatch_count"),
         "vitals_mismatches": _mismatch_list(vitals),
-        "faithfulness_violation_count": (len(faith.get("violations") or []) if isinstance(faith, dict) else None),
-        "faithfulness_violations": (faith.get("violations") or [])[:2] if isinstance(faith, dict) else [],
+        "faithfulness_violation_count": (
+            len(faith.get("violations") or []) if isinstance(faith, dict) else None
+        ),
+        "faithfulness_violations": (faith.get("violations") or [])[:2]
+        if isinstance(faith, dict)
+        else [],
         "mos_score": mos.get("mos_score"),
         "longest_pause_sec": pauses.get("longest_pause_sec"),
-        "max_within_phrase_gap_sec": pause_nat.get("max_within_phrase_gap_sec") if isinstance(pause_nat, dict) else None,
-        "speaking_rate_wps": pause_nat.get("speaking_rate_wps") if isinstance(pause_nat, dict) else None,
-        "pause_flag_count": (len(pause_nat.get("flags") or []) if isinstance(pause_nat, dict) else None),
-        "pause_flags": (pause_nat.get("flags") or [])[:3] if isinstance(pause_nat, dict) else [],
+        "max_within_phrase_gap_sec": pause_nat.get("max_within_phrase_gap_sec")
+        if isinstance(pause_nat, dict)
+        else None,
+        "speaking_rate_wps": pause_nat.get("speaking_rate_wps")
+        if isinstance(pause_nat, dict)
+        else None,
+        "pause_flag_count": (
+            len(pause_nat.get("flags") or []) if isinstance(pause_nat, dict) else None
+        ),
+        "pause_flags": (pause_nat.get("flags") or [])[:3]
+        if isinstance(pause_nat, dict)
+        else [],
         "artifact_count": artifacts.get("artifact_count"),
     }
 
@@ -358,24 +406,43 @@ def compare_to_baseline(suite_id: str, current: Dict[str, Any]) -> dict:
         "pass": int(_num(cur_summary, "pass") - _num(base_summary, "pass")),
         "review": int(_num(cur_summary, "review") - _num(base_summary, "review")),
         "fail": int(_num(cur_summary, "fail") - _num(base_summary, "fail")),
-        "low_confidence": int(_num(cur_summary, "low_confidence") - _num(base_summary, "low_confidence")),
+        "low_confidence": int(
+            _num(cur_summary, "low_confidence") - _num(base_summary, "low_confidence")
+        ),
         "avg_score": None,
     }
-    if isinstance(cur_summary.get("avg_score"), (int, float)) and isinstance(base_summary.get("avg_score"), (int, float)):
-        delta["avg_score"] = round(float(cur_summary["avg_score"]) - float(base_summary["avg_score"]), 2)
+    if isinstance(cur_summary.get("avg_score"), (int, float)) and isinstance(
+        base_summary.get("avg_score"), (int, float)
+    ):
+        delta["avg_score"] = round(
+            float(cur_summary["avg_score"]) - float(base_summary["avg_score"]), 2
+        )
 
-    base_cases = {c.get("case_id"): c for c in (baseline.get("cases") or []) if c.get("case_id")}
-    cur_cases = {c.get("case_id"): c for c in (current.get("cases") or []) if c.get("case_id")}
+    base_cases = {
+        c.get("case_id"): c for c in (baseline.get("cases") or []) if c.get("case_id")
+    }
+    cur_cases = {
+        c.get("case_id"): c for c in (current.get("cases") or []) if c.get("case_id")
+    }
 
     changed = []
     for case_id in sorted(set(base_cases.keys()) | set(cur_cases.keys())):
         b = base_cases.get(case_id)
         c = cur_cases.get(case_id)
         if not b or not c:
-            changed.append({"case_id": case_id, "baseline": b, "current": c, "change": "added" if c else "removed"})
+            changed.append(
+                {
+                    "case_id": case_id,
+                    "baseline": b,
+                    "current": c,
+                    "change": "added" if c else "removed",
+                }
+            )
             continue
         if (b.get("verdict") != c.get("verdict")) or (b.get("score") != c.get("score")):
-            changed.append({"case_id": case_id, "baseline": b, "current": c, "change": "updated"})
+            changed.append(
+                {"case_id": case_id, "baseline": b, "current": c, "change": "updated"}
+            )
 
     return {
         "suite_id": suite_id,
@@ -406,7 +473,9 @@ def _apply_eval_overrides(report: Dict[str, Any]) -> Dict[str, Any]:
     # Vitals mismatches are safety-critical: force FAIL for suite runs.
     vitals = metrics.get("vitals_fidelity") or {}
     if isinstance(vitals, dict) and (vitals.get("mismatch_count") or 0) > 0:
-        failures.append("Vitals mismatch detected (temperature/SpO2/BP differs from expected)")
+        failures.append(
+            "Vitals mismatch detected (temperature/SpO2/BP differs from expected)"
+        )
         _bump_verdict("FAIL")
 
     # Term mismatches: high => FAIL, otherwise REVIEW.
@@ -417,17 +486,23 @@ def _apply_eval_overrides(report: Dict[str, Any]) -> Dict[str, Any]:
         if high > 0:
             # If the best fuzzy ratio is close, treat as REVIEW (often just spelling/ASR variance).
             mismatches = term.get("mismatches") or []
-            best_ratios = [m.get("best_ratio") for m in mismatches if isinstance(m, dict)]
+            best_ratios = [
+                m.get("best_ratio") for m in mismatches if isinstance(m, dict)
+            ]
             min_best = None
             for br in best_ratios:
                 if isinstance(br, (int, float)):
                     min_best = br if min_best is None else min(min_best, br)
 
             if min_best is not None and float(min_best) >= 0.83:
-                failures.append("Critical term near-miss detected (symptom/medication spelling variance — review)")
+                failures.append(
+                    "Critical term near-miss detected (symptom/medication spelling variance — review)"
+                )
                 _bump_verdict("REVIEW")
             else:
-                failures.append("Critical term mismatch detected (symptom/medication not preserved)")
+                failures.append(
+                    "Critical term mismatch detected (symptom/medication not preserved)"
+                )
                 _bump_verdict("FAIL")
         else:
             failures.append("Term mismatch detected (symptom/medication not preserved)")
@@ -447,7 +522,9 @@ def _apply_eval_overrides(report: Dict[str, Any]) -> Dict[str, Any]:
     tags = report.get("tags") or []
     pause_nat = metrics.get("pause_naturalness") or {}
     rate = pause_nat.get("speaking_rate_wps") if isinstance(pause_nat, dict) else None
-    if isinstance(rate, (int, float)) and any(str(t).lower() in {"prosody", "speed", "pause"} for t in tags):
+    if isinstance(rate, (int, float)) and any(
+        str(t).lower() in {"prosody", "speed", "pause"} for t in tags
+    ):
         r = float(rate)
         if r < 2.4 or r > 4.2:
             failures.append("Speaking rate out of expected range (demo threshold)")

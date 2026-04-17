@@ -114,8 +114,14 @@ async function loadSuites() {
     const suites = data.suites || [];
     for (const s of suites) {
       const opt = document.createElement("option");
+      const SUITE_LABELS = {
+        "demo-test-suite": "Demo Test Suite",
+        "hallucination-demo": "Large Demo — Hallucination",
+        "prosody-demo": "Large Demo — Prosody",
+        "symptom-triage": "Large Demo — Symptom Triage",
+      };
       opt.value = s.suite_id;
-      opt.textContent = s.suite_id;
+      opt.textContent = SUITE_LABELS[s.suite_id] || s.suite_id;
       select.appendChild(opt);
     }
     setJson($("eval-json"), data);
@@ -523,13 +529,29 @@ async function runSuite() {
   $("eval-run").disabled = true;
   setSummary($("eval-summary"), "Running...");
   setScore($("eval-avg-score"), null);
-  setJson($("eval-json"), "Running suite (this can take a while if audio exists)...");
   $("eval-top-failures").innerHTML = "";
   $("eval-cases").innerHTML = "";
   renderSummaryStrip(null);
   renderBaselineDelta(null);
   setHidden($("eval-secondary-actions"), true);
   setHidden($("eval-review-guidance"), true);
+
+  const statusBar = $("eval-status-bar");
+  const startTime = Date.now();
+  const messages = [
+    "Transcribing audio with Whisper…",
+    "Running deterministic checks…",
+    "Checking entity and term fidelity…",
+    "Analysing prosody and pauses…",
+    "Generating verdicts…",
+  ];
+  let msgIdx = 0;
+  if (statusBar) { statusBar.style.display = "block"; statusBar.textContent = messages[0]; }
+  const loadingTimer = setInterval(() => {
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+    msgIdx = Math.min(msgIdx + 1, messages.length - 1);
+    if (statusBar) statusBar.textContent = `${messages[msgIdx]} (${elapsed}s)`;
+  }, 4000);
 
   try {
     const includeReports = $("eval-include-reports").checked;
@@ -565,10 +587,14 @@ async function runSuite() {
       setHidden(helpEl, false);
     }
   } catch (e) {
+    clearInterval(loadingTimer);
+    if (statusBar) statusBar.style.display = "none";
     setJson($("eval-json"), { error: String(e) });
     setSummary($("eval-summary"), "Error");
     renderSummaryStrip(null);
   } finally {
+    clearInterval(loadingTimer);
+    if (statusBar) statusBar.style.display = "none";
     $("eval-run").disabled = false;
   }
 }

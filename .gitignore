@@ -6,6 +6,15 @@ uploads/
 *.wav
 *.mp3
 *.m4a
+
+# Allow only demo-test-suite audio
+!eval_set/suites/demo-test-suite/audio/*.wav
+!eval_set/suites/demo-test-suite/audio/*.mp3
 .DS_Store
 venvs/
 eval_set/**/baseline.local.json
+*_handoff.md
+linkedin_post.txt
+complex_findings.md
+test_audio.wav
+plans/

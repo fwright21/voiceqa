@@ -35,7 +35,9 @@ if STATIC_DIR.exists():
 async def ui() -> HTMLResponse:
     index_path = UI_DIR / "index.html"
     if not index_path.exists():
-        raise HTTPException(status_code=500, detail="UI assets missing (ui/index.html not found).")
+        raise HTTPException(
+            status_code=500, detail="UI assets missing (ui/index.html not found)."
+        )
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
 
 
@@ -60,7 +62,9 @@ async def analyse(
       - report_text: human-readable summary
     """
     if not expected_script.strip():
-        raise HTTPException(status_code=422, detail="expected_script must not be empty.")
+        raise HTTPException(
+            status_code=422, detail="expected_script must not be empty."
+        )
 
     suffix = Path(audio.filename or "audio.wav").suffix or ".wav"
     tmp_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
@@ -71,6 +75,7 @@ async def analyse(
             await f.write(content)
 
         from agent import run_analysis
+
         result = run_analysis(
             audio_path=str(tmp_path),
             expected_script=expected_script,
@@ -90,6 +95,7 @@ class EvalRunRequest(BaseModel):
     suite_id: str
     include_reports: bool = False
     report_mode: str = "none"  # none | compact | full
+    max_workers: int | None = None
 
 
 @app.get("/eval/suites")
@@ -103,7 +109,7 @@ async def eval_suites():
 async def eval_run(req: EvalRunRequest):
     from tools.eval_runner import compact_report, run_suite
 
-    result = run_suite(req.suite_id)
+    result = run_suite(req.suite_id, max_workers=req.max_workers)
     report_mode = (req.report_mode or "none").lower().strip()
     if req.include_reports and report_mode == "none":
         report_mode = "full"
@@ -115,7 +121,9 @@ async def eval_run(req: EvalRunRequest):
     elif report_mode == "full":
         pass
     else:
-        raise HTTPException(status_code=422, detail="report_mode must be one of: none, compact, full")
+        raise HTTPException(
+            status_code=422, detail="report_mode must be one of: none, compact, full"
+        )
     return JSONResponse(content=result)
 
 
@@ -192,7 +200,7 @@ async def analyse_batch(
         raise HTTPException(
             status_code=422,
             detail=f"audio_files ({len(audio_files)}) and expected_scripts "
-                   f"({len(expected_scripts)}) must have the same length.",
+            f"({len(expected_scripts)}) must have the same length.",
         )
 
     if len(audio_files) == 0:
@@ -227,25 +235,35 @@ async def analyse_batch(
                 counts[verdict] = counts.get(verdict, 0) + 1
             except Exception as exc:
                 logger.error(f"Failed on file {i + 1}: {exc}")
-                reports.append({
-                    "audio_name": tmp_path.name,
-                    "verdict":    "FAIL",
-                    "failures":   [f"Processing error: {str(exc)}"],
-                    "score":      0,
-                    "error":      str(exc),
-                })
+                reports.append(
+                    {
+                        "audio_name": tmp_path.name,
+                        "verdict": "FAIL",
+                        "failures": [f"Processing error: {str(exc)}"],
+                        "score": 0,
+                        "error": str(exc),
+                    }
+                )
                 counts["FAIL"] += 1
 
-        return JSONResponse(content={
-            "total":          len(reports),
-            "pass":           counts.get("PASS", 0),
-            "review":         counts.get("REVIEW", 0),
-            "fail":           counts.get("FAIL", 0),
-            "low_confidence": counts.get("LOW_CONFIDENCE", 0),
-            "reports":        reports,
-        })
+        return JSONResponse(
+            content={
+                "total": len(reports),
+                "pass": counts.get("PASS", 0),
+                "review": counts.get("REVIEW", 0),
+                "fail": counts.get("FAIL", 0),
+                "low_confidence": counts.get("LOW_CONFIDENCE", 0),
+                "reports": reports,
+            }
+        )
 
     finally:
         for p in tmp_paths:
             if p.exists():
                 p.unlink()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)

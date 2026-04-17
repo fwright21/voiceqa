@@ -38,19 +38,18 @@
           </div>
         </div>
 
-        <div class="hero-grid">
-          <div class="hero-block">
-            <div class="hero-h">Suggested demos</div>
-            <ul class="hero-list">
-              <li><code>symptom-triage</code> — “should pass” baseline suite (terms + vitals)</li>
-              <li><code>hallucination-demo</code> — intentional additions/omissions/contradictions</li>
-              <li><code>prosody-demo</code> — deterministic weird pauses / pacing (flags + jump-to)</li>
+        <div class=”hero-grid”>
+          <div class=”hero-block”>
+            <div class=”hero-h”>Start here</div>
+            <ul class=”hero-list”>
+              <li>Select <strong>Demo Test Suite</strong> in the Eval Suites tab — 5 cases, all failure types covered.</li>
+              <li>Larger suites (hallucination, prosody, symptom triage) are also available if you want more coverage.</li>
             </ul>
           </div>
-          <div class="hero-block">
-            <div class="hero-h">Tips</div>
-            <ul class="hero-list">
-              <li>Audio is local-only; manifests are committed.</li>
+          <div class=”hero-block”>
+            <div class=”hero-h”>Tips</div>
+            <ul class=”hero-list”>
+              <li>Audio stays on your machine — nothing is uploaded.</li>
               <li>Use <em>Save Baseline</em> + <em>Compare</em> to track regressions.</li>
               <li>Use the per-case <em>Jump</em> buttons to listen to flagged regions.</li>
             </ul>
@@ -223,6 +222,8 @@
               </div>
             </div>
           </div>
+
+          <div id="eval-status-bar" style="display:none; padding: 10px 16px; background: var(--surface-2, #f4f4f5); border-radius: 8px; margin-bottom: 12px; font-size: 0.875rem; color: var(--muted, #6b7280);"></div>
 
           <div class="results">
             <div class="card">

@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from langchain_core.tools import tool
 from langchain_ollama import OllamaLLM
@@ -24,19 +25,33 @@ _FAIL_LABELS = [
 
 # Any one of these → REVIEW (medium/low confidence signals)
 _REVIEW_RULES = [
-    lambda d: (d.get("pause_naturalness", {}) or {}).get("max_within_phrase_gap_sec") is not None
-              and d["pause_naturalness"]["max_within_phrase_gap_sec"] >= 1.6,
-    lambda d: (d.get("pause_naturalness", {}) or {}).get("max_within_phrase_gap_sec") is not None
-              and d["pause_naturalness"]["max_within_phrase_gap_sec"] >= 0.9,
-    lambda d: (d.get("mos", {}) or {}).get("mos_score") is not None
-              and d["mos"]["mos_score"] < 3.0,
+    lambda d: (
+        (d.get("pause_naturalness", {}) or {}).get("max_within_phrase_gap_sec")
+        is not None
+        and d["pause_naturalness"]["max_within_phrase_gap_sec"] >= 1.6
+    ),
+    lambda d: (
+        (d.get("pause_naturalness", {}) or {}).get("max_within_phrase_gap_sec")
+        is not None
+        and d["pause_naturalness"]["max_within_phrase_gap_sec"] >= 0.9
+    ),
+    lambda d: (
+        (d.get("mos", {}) or {}).get("mos_score") is not None
+        and d["mos"]["mos_score"] < 3.0
+    ),
     lambda d: (d.get("pauses", {}) or {}).get("longest_pause_sec", 0) > 3.0,
-    lambda d: (d.get("prosody", {}) or {}).get("jitter") is not None
-              and d["prosody"]["jitter"] > 0.05,
-    lambda d: (d.get("prosody", {}) or {}).get("shimmer") is not None
-              and d["prosody"]["shimmer"] > 0.15,
-    lambda d: (d.get("prosody", {}) or {}).get("hnr") is not None
-              and d["prosody"]["hnr"] < 5.0,
+    lambda d: (
+        (d.get("prosody", {}) or {}).get("jitter") is not None
+        and d["prosody"]["jitter"] > 0.05
+    ),
+    lambda d: (
+        (d.get("prosody", {}) or {}).get("shimmer") is not None
+        and d["prosody"]["shimmer"] > 0.15
+    ),
+    lambda d: (
+        (d.get("prosody", {}) or {}).get("hnr") is not None
+        and d["prosody"]["hnr"] < 5.0
+    ),
     lambda d: len((d.get("faithfulness", {}) or {}).get("violations", [])) > 0,
     lambda d: len((d.get("name_fidelity", {}) or {}).get("mismatches", [])) > 0,
 ]
@@ -137,7 +152,9 @@ def _compute_score(verdict: str, analysis_data: dict, failures: list[str]) -> in
     return int(min(100, max(0, base)))
 
 
-def _fallback_report_text(verdict: str, failures: list[str], analysis_data: dict, score: int) -> str:
+def _fallback_report_text(
+    verdict: str, failures: list[str], analysis_data: dict, score: int
+) -> str:
     """Generate a human-readable report without calling an LLM."""
     accuracy = analysis_data.get("accuracy", {}) or {}
     wer = accuracy.get("wer")
@@ -166,37 +183,60 @@ def _fallback_report_text(verdict: str, failures: list[str], analysis_data: dict
 
     suggestions = []
     if isinstance(wer, (int, float)) and float(wer) > 0.15:
-        suggestions.append("Regenerate or clean up the audio to improve intelligibility and reduce WER (background noise, mic artifacts, speed).")
+        suggestions.append(
+            "Regenerate or clean up the audio to improve intelligibility and reduce WER (background noise, mic artifacts, speed)."
+        )
     if len(entity_mismatches) > 0:
-        suggestions.append("Ensure numbers/codes/dates are spoken exactly as expected (entity fidelity mismatches found).")
-    if pauses.get("longest_pause_sec", 0) and float(pauses.get("longest_pause_sec", 0)) > 3.0:
-        suggestions.append("Reduce long silences by tightening turn-taking and trimming dead air in the audio.")
+        suggestions.append(
+            "Ensure numbers/codes/dates are spoken exactly as expected (entity fidelity mismatches found)."
+        )
+    if (
+        pauses.get("longest_pause_sec", 0)
+        and float(pauses.get("longest_pause_sec", 0)) > 3.0
+    ):
+        suggestions.append(
+            "Reduce long silences by tightening turn-taking and trimming dead air in the audio."
+        )
     if len(artifacts_list) > 0:
-        suggestions.append("Address audio artifacts (normalize levels, avoid clipping, remove clicks/pops).")
+        suggestions.append(
+            "Address audio artifacts (normalize levels, avoid clipping, remove clicks/pops)."
+        )
     if mos.get("mos_score") is not None and float(mos.get("mos_score")) < 3.0:
-        suggestions.append("Try a different voice/model or adjust synthesis settings (MOS suggests unnaturalness).")
+        suggestions.append(
+            "Try a different voice/model or adjust synthesis settings (MOS suggests unnaturalness)."
+        )
     if len(faithfulness_violations) > 0:
-        suggestions.append("Manually review content against the script (faithfulness tool flagged potential semantic issues).")
+        suggestions.append(
+            "Manually review content against the script (faithfulness tool flagged potential semantic issues)."
+        )
 
     while len(suggestions) < 3:
-        suggestions.append("Spot-check the transcript vs expected script and rerun VoiceQA after any audio/model changes.")
+        suggestions.append(
+            "Spot-check the transcript vs expected script and rerun VoiceQA after any audio/model changes."
+        )
 
     # Render concise lists (avoid very long lines)
     pause_lines = []
     for p in pauses_list[:5]:
-        pause_lines.append(f"- {p.get('start_sec')}s → {p.get('end_sec')}s ({p.get('duration_sec')}s)")
+        pause_lines.append(
+            f"- {p.get('start_sec')}s → {p.get('end_sec')}s ({p.get('duration_sec')}s)"
+        )
     if len(pauses_list) > 5:
         pause_lines.append(f"- ... ({len(pauses_list) - 5} more)")
 
     artifact_lines = []
     for a in artifacts_list[:5]:
-        artifact_lines.append(f"- {a.get('severity', '').upper()} {a.get('type')}: {a.get('detail')}")
+        artifact_lines.append(
+            f"- {a.get('severity', '').upper()} {a.get('type')}: {a.get('detail')}"
+        )
     if len(artifacts_list) > 5:
         artifact_lines.append(f"- ... ({len(artifacts_list) - 5} more)")
 
     entity_lines = []
     for m in entity_mismatches[:5]:
-        entity_lines.append(f"- expected={m.get('expected')} transcript={m.get('transcript')}")
+        entity_lines.append(
+            f"- expected={m.get('expected')} transcript={m.get('transcript')}"
+        )
     if len(entity_mismatches) > 5:
         entity_lines.append(f"- ... ({len(entity_mismatches) - 5} more)")
 
@@ -211,7 +251,8 @@ def _fallback_report_text(verdict: str, failures: list[str], analysis_data: dict
         str(int(score)),
         "",
         "### Summary",
-        f"Verdict: {verdict}. " + ("; ".join(reasons) if reasons else "No issues detected."),
+        f"Verdict: {verdict}. "
+        + ("; ".join(reasons) if reasons else "No issues detected."),
         "This report was generated without an LLM because the local Ollama endpoint was unavailable.",
         "",
         "### Transcript Accuracy",
@@ -227,18 +268,22 @@ def _fallback_report_text(verdict: str, failures: list[str], analysis_data: dict
     ]
     lines.extend(pause_lines if pause_lines else ["- None"])
 
-    lines.extend([
-        "",
-        "### Audio Artifact Analysis",
-        f"Artifact count: {artifacts.get('artifact_count', 0)}. Overall clean: {artifacts.get('overall_clean')}.",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Audio Artifact Analysis",
+            f"Artifact count: {artifacts.get('artifact_count', 0)}. Overall clean: {artifacts.get('overall_clean')}.",
+        ]
+    )
     lines.extend(artifact_lines if artifact_lines else ["- None"])
 
-    lines.extend([
-        "",
-        "### Entity & Faithfulness",
-        f"Entity mismatches: {len(entity_mismatches)}. Name mismatches: {len(name_mismatches)}. Faithfulness violations: {len(faithfulness_violations)}.",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Entity & Faithfulness",
+            f"Entity mismatches: {len(entity_mismatches)}. Name mismatches: {len(name_mismatches)}. Faithfulness violations: {len(faithfulness_violations)}.",
+        ]
+    )
     if len(entity_mismatches):
         lines.append("Entity mismatches:")
         lines.extend(entity_lines)
@@ -257,14 +302,16 @@ def _fallback_report_text(verdict: str, failures: list[str], analysis_data: dict
     else:
         lines.append("Faithfulness violations: None")
 
-    lines.extend([
-        "",
-        "### Suggestions",
-        "1. " + suggestions[0],
-        "2. " + suggestions[1],
-        "3. " + suggestions[2],
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Suggestions",
+            "1. " + suggestions[0],
+            "2. " + suggestions[1],
+            "3. " + suggestions[2],
+            "",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -333,7 +380,9 @@ def generate_qa_report(analysis_data: dict) -> dict:
     # If transcript was flagged low-confidence upstream, override verdict
     if analysis_data.get("transcript_confidence") == "low":
         verdict = "LOW_CONFIDENCE"
-        failures = ["Whisper transcript confidence too low — audio may be silent or corrupted"]
+        failures = [
+            "Whisper transcript confidence too low — audio may be silent or corrupted"
+        ]
 
     llm = OllamaLLM(
         model=get_model("report"),
@@ -388,13 +437,15 @@ def generate_qa_report(analysis_data: dict) -> dict:
 
     return {
         "report_text": report_text,
-        "score":       score,
-        "verdict":     verdict,
-        "failures":    failures,
+        "score": score,
+        "verdict": verdict,
+        "failures": failures,
         "suggestions": suggestions,
     }
     name_lines = []
     for m in name_mismatches[:5]:
-        name_lines.append(f"- expected={m.get('value')} best_match={m.get('best_match')} ratio={m.get('best_ratio')}")
+        name_lines.append(
+            f"- expected={m.get('value')} best_match={m.get('best_match')} ratio={m.get('best_ratio')}"
+        )
     if len(name_mismatches) > 5:
         name_lines.append(f"- ... ({len(name_mismatches) - 5} more)")
