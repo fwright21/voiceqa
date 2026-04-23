@@ -23,6 +23,7 @@ praat-parselmouth>=0.4.3
 # MOS prediction (SpeechMOS — UTMOS requires PyTorch >= 2.4, incompatible)
 speechmos==0.0.1.1
 onnxruntime==1.23.2
+librosa==0.11.0
 
 # LLM / agent
 langchain==1.2.10

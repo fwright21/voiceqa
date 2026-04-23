@@ -39,6 +39,7 @@ Accepts an audio file plus the expected script, runs a layered pipeline, and ret
 - **Audio artifacts** — clipping, DC offset, noise, pops/clicks (deterministic)
 - **Pauses** — silence gaps with timestamps (deterministic)
 - **Pause naturalness** — classify pauses as within‑phrase vs between‑phrase (deterministic)
+- **Speaking rate (beta)** — per-segment speed checks; current too-fast/too-slow thresholds are intentionally conservative and should be recalibrated per voice/domain
 - **Prosody** — F0 mean, jitter, shimmer, HNR (Praat/Parselmouth; graceful skip)
 - **MOS prediction** — DNSMOS via SpeechMOS (graceful skip)
 - **Entity fidelity** — numbers/codes/dates mismatches (deterministic)

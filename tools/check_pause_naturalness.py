@@ -74,6 +74,17 @@ def check_pause_naturalness(
 
     # If phrase spans are unavailable, treat everything as "unknown phrase".
     phrase_spans = phrases if isinstance(phrases, list) else []
+    phrase_bounds = []
+    for p in phrase_spans:
+        if not isinstance(p, dict):
+            continue
+        try:
+            phrase_bounds.append((float(p.get("start_sec")), float(p.get("end_sec"))))
+        except Exception:
+            continue
+    phrase_bounds.sort(key=lambda x: x[0])
+    first_phrase_start = phrase_bounds[0][0] if phrase_bounds else None
+    last_phrase_end = phrase_bounds[-1][1] if phrase_bounds else None
 
     def _phrase_for_time(t: float) -> Optional[int]:
         for p in phrase_spans:
@@ -120,8 +131,19 @@ def check_pause_naturalness(
             continue
 
         between = _is_between_phrases(start, end) if phrase_spans else False
-        within = not between
-        phrase_id = _phrase_for_time((start + end) / 2.0) if within else None
+        phrase_id = _phrase_for_time((start + end) / 2.0) if phrase_spans else None
+        within = (not between) and (phrase_id is not None)
+        outside_phrases = (not between) and (phrase_id is None)
+
+        # Best-effort labeling for pauses outside all phrase spans (e.g. leading/trailing silence).
+        context = None
+        if outside_phrases and first_phrase_start is not None and last_phrase_end is not None:
+            if end <= first_phrase_start:
+                context = "leading_silence"
+            elif start >= last_phrase_end:
+                context = "trailing_silence"
+            else:
+                context = "outside_phrases"
 
         ev = {
             "start_sec": round(start, 3),
@@ -131,6 +153,10 @@ def check_pause_naturalness(
             "between_phrases": bool(between),
             "phrase_id": phrase_id,
         }
+        if outside_phrases:
+            ev["outside_phrases"] = True
+            if context:
+                ev["context"] = context
         gaps.append(ev)
 
         if within:
@@ -139,7 +165,7 @@ def check_pause_naturalness(
                 flags.append({"level": "fail", "type": "within_phrase_pause", **ev})
             elif dur >= within_phrase_warn_sec:
                 flags.append({"level": "warn", "type": "within_phrase_pause", **ev})
-        else:
+        elif between:
             max_between = max(max_between, dur)
             if dur >= between_phrase_warn_sec:
                 flags.append({"level": "warn", "type": "between_phrase_pause", **ev})

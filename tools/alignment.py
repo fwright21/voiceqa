@@ -192,6 +192,23 @@ def build_alignment(
                 phrase_spans = _build_phrase_spans_from_gaps(word_spans)
                 phrase_method = "gap"
 
+        # Enrich phrase spans with derived fields used downstream (e.g. speaking rate).
+        if phrase_spans and word_spans:
+            for p in phrase_spans:
+                if not isinstance(p, dict):
+                    continue
+                ws = p.get("word_start")
+                we = p.get("word_end")
+                if isinstance(ws, int) and isinstance(we, int) and 0 <= ws <= we < len(word_spans):
+                    p["word_count"] = int(we - ws + 1)
+                    try:
+                        p["duration_sec"] = round(float(p.get("end_sec")) - float(p.get("start_sec")), 3)
+                    except Exception:
+                        p["duration_sec"] = None
+                else:
+                    p["word_count"] = None
+                    p["duration_sec"] = None
+
         return {
             "backend": backend,
             "word_spans": word_spans,

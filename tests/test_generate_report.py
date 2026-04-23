@@ -23,3 +23,23 @@ def test_generate_qa_report_returns_expected_shape():
     assert result["verdict"] in ("PASS", "REVIEW", "FAIL", "LOW_CONFIDENCE")
     assert isinstance(result["failures"], list)
     assert isinstance(result["suggestions"], list)
+
+
+def test_generate_qa_report_adds_speaking_rate_suggestion_when_flagged():
+    from tools.generate_qa_report import generate_qa_report
+
+    analysis_data = {
+        "audio_name": "test_audio.wav",
+        "transcript": "Hello world.",
+        "transcript_confidence": "ok",
+        "accuracy": {"wer": 0.0},
+        "pauses": {"pause_count": 0, "longest_pause_sec": 0.0, "pauses": []},
+        "pause_naturalness": {"max_within_phrase_gap_sec": 0.0, "flags": []},
+        "speaking_rate": {"segments": [{"severity": "warn"}]},
+    }
+
+    result = generate_qa_report.invoke({"analysis_data": analysis_data})
+
+    suggestions = result.get("suggestions") or []
+    assert any("speaking rate" in str(s).lower() for s in suggestions)
+    assert any("done when:" in str(s).lower() for s in suggestions)

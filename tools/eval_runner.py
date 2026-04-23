@@ -11,9 +11,173 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EVAL_ROOT = REPO_ROOT / "eval_set" / "suites"
 BASELINE_FILENAME = "baseline.local.json"
 
+DEFAULT_WEIGHTS = {
+    "critical_term_missing": 3.0,
+    "vitals_fidelity_fail": 3.0,
+    "name_fidelity_fail": 2.0,
+    "wrong_language": 2.0,
+    "code_switching": 2.0,
+    "unnatural_pause": 1.0,
+    "speaking_rate_out_of_range": 1.0,
+    "pitch_monotone": 0.5,
+    "filled_pause": 0.5,
+    "faithfulness_warn": 0.5,
+    "mos": 0.5,
+}
+
+DEFAULT_MAX_VERDICTS = {
+    "critical_term_missing": "fail",
+    "vitals_fidelity_fail": "fail",
+    "name_fidelity_fail": "fail",
+    "wrong_language": "fail",
+    "code_switching": "fail",
+    "unnatural_pause": "review",
+    "speaking_rate_out_of_range": "review",
+    "pitch_monotone": "review",
+    "filled_pause": "review",
+    "faithfulness_warn": "review",
+    "mos": "review",
+}
+
+PROSOCIC_CHECKS = {
+    "unnatural_pause",
+    "speaking_rate_out_of_range",
+    "pitch_monotone",
+    "filled_pause",
+    "mos",
+}
+
+VERDICT_ORDER = {"ok": 0, "warn": 1, "fail": 2, "review": 1, "pass": 3}
+SCORE_DEFAULTS = {
+    "warn_penalty": 5,
+    "fail_penalty": 20,
+    "pass_threshold": 90,
+    "review_threshold": 70,
+}
+
 
 class EvalError(RuntimeError):
     pass
+
+
+def compute_weighted_score(
+    metrics: Dict[str, Any],
+    config: Dict[str, Any] | None = None,
+    weights: Dict[str, float] | None = None,
+    max_verdicts: Dict[str, str] | None = None,
+) -> Dict[str, Any]:
+    """Compute weighted score from check results.
+
+    Args:
+        metrics: Dict of check_name -> result dicts (each must have 'severity' field)
+        config: Optional scoring config (warn_penalty, fail_penalty, verdict_thresholds)
+        weights: Override default weights
+        max_verdicts: Override max verdicts per check
+
+    Returns:
+        Dict with score, verdict, score_breakdown
+    """
+    score_cfg = config.get("scoring") if isinstance(config, dict) else {}
+    warn_penalty = int(score_cfg.get("warn_penalty", SCORE_DEFAULTS["warn_penalty"]))
+    fail_penalty = int(score_cfg.get("fail_penalty", SCORE_DEFAULTS["fail_penalty"]))
+    pass_thresh = int(
+        score_cfg.get("verdict_thresholds", {}).get(
+            "pass", SCORE_DEFAULTS["pass_threshold"]
+        )
+    )
+    review_thresh = int(
+        score_cfg.get("verdict_thresholds", {}).get(
+            "review", SCORE_DEFAULTS["review_threshold"]
+        )
+    )
+
+    w = weights or DEFAULT_WEIGHTS
+    max_v = max_verdicts or DEFAULT_MAX_VERDICTS
+
+    score_breakdown: List[Dict[str, Any]] = []
+    base_score = 100.0
+
+    for check_name, result in metrics.items():
+        if not isinstance(result, dict):
+            continue
+        severity = result.get("severity") or result.get("verdict", "ok")
+        if severity == "ok" or severity == "info":
+            continue
+
+        weight = w.get(check_name, 1.0)
+        max_verdict = max_v.get(check_name, "fail")
+
+        cap_severity = severity
+        was_capped = False
+        if check_name in PROSOCIC_CHECKS and VERDICT_ORDER.get(
+            severity, 0
+        ) > VERDICT_ORDER.get(max_verdict, 2):
+            cap_severity = max_verdict
+            was_capped = True
+
+        penalty_for_severity = (
+            fail_penalty
+            if cap_severity == "fail"
+            else warn_penalty
+            if cap_severity == "warn"
+            else 0
+        )
+
+        if was_capped:
+            penalty_for_severity = warn_penalty
+
+        if penalty_for_severity == 0:
+            continue
+
+        penalty_adj = penalty_for_severity * weight
+        base_score += penalty_adj * -1
+        score_breakdown.append(
+            {
+                "check": check_name,
+                "severity": cap_severity,
+                "weight": weight,
+                "penalty": -penalty_for_severity,
+                "penalty_weighted": -penalty_adj,
+                "capped": was_capped,
+            }
+        )
+
+    final_score = max(0, int(round(base_score)))
+
+    if final_score >= pass_thresh:
+        verdict = "PASS"
+    elif final_score >= review_thresh:
+        verdict = "REVIEW"
+    else:
+        verdict = "FAIL"
+        if any(m in PROSOCIC_CHECKS for m in metrics):
+            has_fail = any(
+                VERDICT_ORDER.get(r.get("severity", "ok"), 0) >= VERDICT_ORDER["fail"]
+                and m not in PROSOCIC_CHECKS
+                for m, r in metrics.items()
+                if isinstance(r, dict)
+            )
+            if not has_fail:
+                verdict = "REVIEW"
+
+    return {
+        "score": final_score,
+        "verdict": verdict,
+        "score_breakdown": score_breakdown,
+    }
+
+
+def extract_severity_from_result(result: Dict[str, Any]) -> str:
+    """Extract severity from a check result dict."""
+    if not isinstance(result, dict):
+        return "ok"
+    for key in ("severity", "verdict", "level"):
+        val = result.get(key)
+        if val in ("ok", "warn", "fail", "info", "pass", "review"):
+            return val
+    if result.get("skipped"):
+        return "ok"
+    return "ok"
 
 
 @dataclass(frozen=True)
@@ -246,16 +410,33 @@ def run_suite(suite_id: str, max_workers: int | None = None) -> dict:
     if max_workers is None:
         max_workers = 4  # Reduced to avoid memory issues
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_run_single_case, case, suite_dir): case for case in cases
-        }
-        for future in as_completed(futures):
+    try:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_run_single_case, case, suite_dir): case
+                for case in cases
+            }
+            for future in as_completed(futures):
+                try:
+                    report = future.result()
+                    reports.append(report)
+                except Exception as exc:
+                    case = futures[future]
+                    reports.append(
+                        {
+                            "case_id": case.case_id,
+                            "audio_path": str(case.audio_path),
+                            "verdict": "FAIL",
+                            "score": 0,
+                            "failures": [f"Execution error: {exc}"],
+                            "error": "execution_error",
+                        }
+                    )
+    except (NotImplementedError, PermissionError, OSError):
+        for case in cases:
             try:
-                report = future.result()
-                reports.append(report)
+                reports.append(_run_single_case(case, suite_dir))
             except Exception as exc:
-                case = futures[future]
                 reports.append(
                     {
                         "case_id": case.case_id,
@@ -294,6 +475,7 @@ def compact_report(report: Dict[str, Any]) -> Dict[str, Any]:
     mos = metrics.get("mos") or {}
     pauses = metrics.get("pauses") or {}
     pause_nat = metrics.get("pause_naturalness") or {}
+    speaking_rate = metrics.get("speaking_rate") or {}
     artifacts = metrics.get("artifacts") or {}
 
     def _mismatch_list(obj: Any, key: str = "mismatches", limit: int = 3) -> list:
@@ -321,6 +503,8 @@ def compact_report(report: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(faith, dict)
         else [],
         "mos_score": mos.get("mos_score"),
+        "mos_skipped": mos.get("skipped") if isinstance(mos, dict) else None,
+        "mos_error": mos.get("error") if isinstance(mos, dict) else None,
         "longest_pause_sec": pauses.get("longest_pause_sec"),
         "max_within_phrase_gap_sec": pause_nat.get("max_within_phrase_gap_sec")
         if isinstance(pause_nat, dict)
@@ -334,6 +518,12 @@ def compact_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "pause_flags": (pause_nat.get("flags") or [])[:3]
         if isinstance(pause_nat, dict)
         else [],
+        "speaking_rate_overall": speaking_rate.get("overall_rate")
+        if isinstance(speaking_rate, dict)
+        else None,
+        "speaking_rate_unit": speaking_rate.get("rate_unit")
+        if isinstance(speaking_rate, dict)
+        else None,
         "artifact_count": artifacts.get("artifact_count"),
     }
 
@@ -348,8 +538,10 @@ def compact_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "transcript": report.get("transcript"),
         "verdict": report.get("verdict"),
         "score": report.get("score"),
+        "score_breakdown": report.get("score_breakdown") or [],
         "failures": report.get("failures") or [],
         "suggestions": report.get("suggestions") or [],
+        "flagged_regions": report.get("flagged_regions") or [],
         "highlights": highlights,
     }
 
@@ -461,8 +653,17 @@ def _apply_eval_overrides(report: Dict[str, Any]) -> Dict[str, Any]:
     """
     metrics = report.get("metrics") or {}
     failures = list(report.get("failures") or [])
+    suggestions = list(report.get("suggestions") or [])
+    score_breakdown = list(report.get("score_breakdown") or [])
     verdict = report.get("verdict") or "FAIL"
     score = report.get("score")
+
+    def _add_suggestion(text: str):
+        if not text:
+            return
+        if text in suggestions:
+            return
+        suggestions.append(text)
 
     def _bump_verdict(new_verdict: str):
         nonlocal verdict
@@ -475,6 +676,18 @@ def _apply_eval_overrides(report: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(vitals, dict) and (vitals.get("mismatch_count") or 0) > 0:
         failures.append(
             "Vitals mismatch detected (temperature/SpO2/BP differs from expected)"
+        )
+        _add_suggestion(
+            "Fix vitals mismatches: speak values clearly (often digit-by-digit), slow down the vitals phrase, and avoid homophones (e.g. hyper vs hypo). Then rerun and confirm mismatch_count is 0."
+        )
+        score_breakdown.append(
+            {
+                "check": "vitals_fidelity_fail",
+                "severity": "fail",
+                "weight": DEFAULT_WEIGHTS["vitals_fidelity_fail"],
+                "penalty": -SCORE_DEFAULTS["fail_penalty"],
+                "capped": False,
+            }
         )
         _bump_verdict("FAIL")
 
@@ -498,19 +711,57 @@ def _apply_eval_overrides(report: Dict[str, Any]) -> Dict[str, Any]:
                 failures.append(
                     "Critical term near-miss detected (symptom/medication spelling variance — review)"
                 )
+                _add_suggestion(
+                    "For near-miss medication/symptom terms: respell phonetically in the script or use SSML `<phoneme>` if supported; keep the term isolated in its own short phrase."
+                )
+                score_breakdown.append(
+                    {
+                        "check": "critical_term_missing",
+                        "severity": "warn",
+                        "weight": DEFAULT_WEIGHTS["critical_term_missing"],
+                        "penalty": -SCORE_DEFAULTS["warn_penalty"],
+                        "capped": False,
+                    }
+                )
                 _bump_verdict("REVIEW")
             else:
                 failures.append(
                     "Critical term mismatch detected (symptom/medication not preserved)"
                 )
+                _add_suggestion(
+                    "For critical term mismatches: re-generate TTS or adjust pronunciation (phonetic respelling / SSML phoneme). For safety-critical terms, prefer a scripted/templated phrase."
+                )
+                score_breakdown.append(
+                    {
+                        "check": "critical_term_missing",
+                        "severity": "fail",
+                        "weight": DEFAULT_WEIGHTS["critical_term_missing"],
+                        "penalty": -SCORE_DEFAULTS["fail_penalty"],
+                        "capped": False,
+                    }
+                )
                 _bump_verdict("FAIL")
         else:
             failures.append("Term mismatch detected (symptom/medication not preserved)")
+            _add_suggestion(
+                "Fix term mismatches: shorten the sentence around the term and reduce expressive settings that can cause word drops; rerun and confirm term mismatches disappear."
+            )
+            score_breakdown.append(
+                {
+                    "check": "critical_term_missing",
+                    "severity": "warn",
+                    "weight": DEFAULT_WEIGHTS["critical_term_missing"],
+                    "penalty": -SCORE_DEFAULTS["warn_penalty"],
+                    "capped": False,
+                }
+            )
             _bump_verdict("REVIEW")
 
     # Update report fields if changed.
     report["verdict"] = verdict
     report["failures"] = failures
+    report["suggestions"] = suggestions[:3]
+    report["score_breakdown"] = score_breakdown
     if isinstance(score, (int, float)):
         # Light penalty for overrides so they show up in ordering, without rewriting the scoring model.
         if verdict == "FAIL":
@@ -528,10 +779,53 @@ def _apply_eval_overrides(report: Dict[str, Any]) -> Dict[str, Any]:
         r = float(rate)
         if r < 2.4 or r > 4.2:
             failures.append("Speaking rate out of expected range (demo threshold)")
+            _add_suggestion(
+                "Fix speaking rate: reduce provider speed or wrap the fast segment in SSML `<prosody rate=\"slow\">`, and add short breaks between key phrases."
+            )
+            score_breakdown.append(
+                {
+                    "check": "speaking_rate_out_of_range",
+                    "severity": "warn",
+                    "weight": DEFAULT_WEIGHTS["speaking_rate_out_of_range"],
+                    "penalty": -SCORE_DEFAULTS["warn_penalty"],
+                    "capped": False,
+                }
+            )
             _bump_verdict("REVIEW")
             report["failures"] = failures
             report["verdict"] = verdict
+            report["suggestions"] = suggestions[:3]
+            report["score_breakdown"] = score_breakdown
             if isinstance(report.get("score"), (int, float)):
                 report["score"] = int(max(0, float(report["score"]) - 5))
+
+    # Demo showcase: filled pauses should be visible in default "Non-PASS" filtering.
+    pauses = metrics.get("pauses") or {}
+    filled = pauses.get("filled_pauses") or []
+    if any(str(t).lower() in {"filled_pause", "filled_pauses", "filled"} for t in tags) and isinstance(
+        filled, list
+    ) and len(filled) > 0:
+        msg = "Filled pauses detected (demo showcase)"
+        if msg not in failures:
+            failures.append(msg)
+        _add_suggestion(
+            "Remove 'um/uh' fillers for formal scripts, or switch to a more conversational style if appropriate. Rerun and confirm filled pauses are gone."
+        )
+        score_breakdown.append(
+            {
+                "check": "filled_pause",
+                "severity": "warn",
+                "weight": DEFAULT_WEIGHTS["filled_pause"],
+                "penalty": -SCORE_DEFAULTS["warn_penalty"],
+                "capped": False,
+            }
+        )
+        _bump_verdict("REVIEW")
+        report["failures"] = failures
+        report["verdict"] = verdict
+        report["suggestions"] = suggestions[:3]
+        report["score_breakdown"] = score_breakdown
+        if isinstance(report.get("score"), (int, float)):
+            report["score"] = int(max(0, float(report["score"]) - 5))
 
     return report

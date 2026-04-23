@@ -12,6 +12,8 @@ uploads/
 !eval_set/suites/demo-test-suite/audio/*.mp3
 .DS_Store
 venvs/
+venv/
+.venv/
 eval_set/**/baseline.local.json
 *_handoff.md
 linkedin_post.txt
