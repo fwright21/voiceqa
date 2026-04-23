@@ -38,17 +38,17 @@
           </div>
         </div>
 
-        <div class=”hero-grid”>
-          <div class=”hero-block”>
-            <div class=”hero-h”>Start here</div>
-            <ul class=”hero-list”>
+        <div class="hero-grid">
+          <div class="hero-block">
+            <div class="hero-h">Start here</div>
+            <ul class="hero-list">
               <li>Select <strong>Demo Test Suite</strong> in the Eval Suites tab — 5 cases, all failure types covered.</li>
               <li>Larger suites (hallucination, prosody, symptom triage) are also available if you want more coverage.</li>
             </ul>
           </div>
-          <div class=”hero-block”>
-            <div class=”hero-h”>Tips</div>
-            <ul class=”hero-list”>
+          <div class="hero-block">
+            <div class="hero-h">Tips</div>
+            <ul class="hero-list">
               <li>Audio stays on your machine — nothing is uploaded.</li>
               <li>Use <em>Save Baseline</em> + <em>Compare</em> to track regressions.</li>
               <li>Use the per-case <em>Jump</em> buttons to listen to flagged regions.</li>
@@ -75,6 +75,9 @@
                 Audio clip
                 <input id="single-audio" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg" required />
               </label>
+            </div>
+            <div class="row hidden" id="single-audio-player-row">
+              <audio id="single-audio-player" controls style="width:100%;"></audio>
             </div>
 
             <div class="row">
@@ -112,6 +115,11 @@
               <div class="section">
                 <div class="section-h">Top issues</div>
                 <div id="single-failures" class="kv">Run an analysis to see results.</div>
+              </div>
+
+              <div class="section">
+                <div class="section-h">Next actions</div>
+                <div id="single-suggestions" class="kv muted">—</div>
               </div>
 
               <div class="section">
@@ -175,7 +183,7 @@
               <div class="row" style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
                 <label class="label" style="display:flex; align-items:center; gap:10px; margin:0;">
                   <input id="eval-include-reports" type="checkbox" checked />
-                  Show case review cards (recommended)
+                  Include reports (case review cards)
                 </label>
                 <label class="label" style="display:flex; align-items:center; gap:10px; margin:0;">
                   <input id="eval-show-pass" type="checkbox" />
@@ -183,7 +191,7 @@
                 </label>
                 <label class="label" style="display:flex; align-items:center; gap:10px; margin:0;">
                   <input id="eval-full-json" type="checkbox" />
-                  Include raw metrics JSON (very large)
+                  Include raw metrics JSON (very large; otherwise compact)
                 </label>
               </div>
             </div>

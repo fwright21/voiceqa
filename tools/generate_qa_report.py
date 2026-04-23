@@ -152,6 +152,162 @@ def _compute_score(verdict: str, analysis_data: dict, failures: list[str]) -> in
     return int(min(100, max(0, base)))
 
 
+def _actionable_suggestions(analysis_data: dict) -> list[str]:
+    """
+    Deterministic remediation suggestions.
+
+    Keep these stable and actionable: "what to do next" for the common failure modes.
+    """
+    suggestions: list[str] = []
+
+    def _ticket(task: str, done_when: str) -> str:
+        task = (task or "").strip().rstrip(".")
+        done_when = (done_when or "").strip().rstrip(".")
+        if not task:
+            return ""
+        if not done_when:
+            return task
+        return f"{task} (Done when: {done_when})"
+
+    def _add(text: str):
+        if not text:
+            return
+        if text in suggestions:
+            return
+        suggestions.append(text)
+
+    accuracy = analysis_data.get("accuracy", {}) or {}
+    wer = accuracy.get("wer")
+    pauses = analysis_data.get("pauses", {}) or {}
+    pause_nat = analysis_data.get("pause_naturalness", {}) or {}
+    artifacts = analysis_data.get("artifacts", {}) or {}
+    prosody = analysis_data.get("prosody", {}) or {}
+    mos = analysis_data.get("mos", {}) or {}
+    entity = analysis_data.get("entity_fidelity", {}) or {}
+    name_fidelity = analysis_data.get("name_fidelity", {}) or {}
+    faithfulness = analysis_data.get("faithfulness", {}) or {}
+
+    # Transcript quality (WER).
+    if isinstance(wer, (int, float)) and float(wer) > 0.15:
+        _add(
+            _ticket(
+                "Improve transcript quality: slow down delivery and reduce noise/artifacts (regenerate TTS or rerecord closer to the mic)",
+                "WER <= 0.15 and the transcript reads cleanly",
+            )
+        )
+
+    # Entity fidelity.
+    entity_mismatches = entity.get("mismatches") or []
+    if isinstance(entity_mismatches, list) and len(entity_mismatches) > 0:
+        _add(
+            _ticket(
+                "Fix numbers/codes/dates: speak safety-critical values digit-by-digit and avoid ambiguous phrasing",
+                "Entity mismatches are 0",
+            )
+        )
+
+    # Unnatural pauses.
+    max_within = pause_nat.get("max_within_phrase_gap_sec")
+    if isinstance(max_within, (int, float)) and float(max_within) >= 0.9:
+        _add(
+            _ticket(
+                "Remove mid-phrase pauses: simplify punctuation and split long sentences (or reduce TTS style/instability)",
+                "Max within-phrase gap is < 0.9s",
+            )
+        )
+    longest_pause = pauses.get("longest_pause_sec")
+    if isinstance(longest_pause, (int, float)) and float(longest_pause) > 3.0:
+        _add(
+            _ticket(
+                "Trim trailing dead air and tighten turn-taking (often extra punctuation or padding)",
+                "Longest pause is <= 3.0s",
+            )
+        )
+
+    # Speaking rate.
+    speaking_rate = analysis_data.get("speaking_rate", {}) or {}
+    segments = speaking_rate.get("segments") or []
+    if isinstance(segments, list) and any(
+        isinstance(s, dict) and s.get("severity") in {"warn", "fail"} for s in segments
+    ):
+        _add(
+            _ticket(
+                "Adjust speaking rate in flagged segments (SSML prosody rate / provider speed) and add short breaks around critical phrases",
+                "No speaking-rate segments are warn/fail",
+            )
+        )
+
+    # Audio artifacts.
+    artifacts_list = artifacts.get("artifacts") or []
+    if isinstance(artifacts_list, list) and len(artifacts_list) > 0:
+        _add(
+            _ticket(
+                "Reduce audio artifacts: lower gain to avoid clipping, normalize peaks, and remove clicks/pops (voice/model or de-click postprocess)",
+                "Artifact count is 0 and playback sounds clean",
+            )
+        )
+
+    # Naturalness / prosody.
+    mos_score = mos.get("mos_score")
+    if isinstance(mos_score, (int, float)) and float(mos_score) < 3.5:
+        _add(
+            _ticket(
+                "Make the voice sound more natural: try a different voice/model or adjust expressiveness/stability",
+                "MOS is >= 3.5 (or reviewers agree it sounds natural)",
+            )
+        )
+    monotone = prosody.get("monotone")
+    if monotone is True:
+        _add(
+            _ticket(
+                "Add prosody: increase expressiveness or add SSML emphasis (pitch/rate) on key phrases",
+                "Monotone flag clears (or pitch variance is acceptable)",
+            )
+        )
+
+    # Name fidelity.
+    name_mismatches = name_fidelity.get("mismatches") or []
+    if isinstance(name_mismatches, list) and len(name_mismatches) > 0:
+        _add(
+            _ticket(
+                "Fix name pronunciation: respell phonetically or use SSML phoneme (if supported)",
+                "Name mismatches are 0",
+            )
+        )
+
+    # Faithfulness.
+    violations = faithfulness.get("violations") or []
+    if isinstance(violations, list) and len(violations) > 0:
+        _add(
+            _ticket(
+                "Reduce meaning drift: tighten constraints/prompting or template safety-critical phrasing",
+                "Faithfulness violations are 0",
+            )
+        )
+
+    # Ensure at least 3 items, but avoid fluff.
+    _add(
+        _ticket(
+            "Review the flagged moments (Jump) and confirm the issue is real (not just ASR formatting variance)",
+            "A human listener agrees the issue is present",
+        )
+    )
+    _add(
+        _ticket(
+            "After changes, rerun the same suite and compare against a saved baseline",
+            "No new FAIL/REVIEW cases and the target case improves",
+        )
+    )
+    _add(
+        _ticket(
+            "If the issue seems flaky, rerun the same clip 2-3 times before changing thresholds/weights",
+            "You can reproduce (or rule out) the issue reliably",
+        )
+    )
+
+    return suggestions[:3]
+
+
 def _fallback_report_text(
     verdict: str, failures: list[str], analysis_data: dict, score: int
 ) -> str:
@@ -181,39 +337,7 @@ def _fallback_report_text(
             return str(round(float(value), 3))
         return str(value)
 
-    suggestions = []
-    if isinstance(wer, (int, float)) and float(wer) > 0.15:
-        suggestions.append(
-            "Regenerate or clean up the audio to improve intelligibility and reduce WER (background noise, mic artifacts, speed)."
-        )
-    if len(entity_mismatches) > 0:
-        suggestions.append(
-            "Ensure numbers/codes/dates are spoken exactly as expected (entity fidelity mismatches found)."
-        )
-    if (
-        pauses.get("longest_pause_sec", 0)
-        and float(pauses.get("longest_pause_sec", 0)) > 3.0
-    ):
-        suggestions.append(
-            "Reduce long silences by tightening turn-taking and trimming dead air in the audio."
-        )
-    if len(artifacts_list) > 0:
-        suggestions.append(
-            "Address audio artifacts (normalize levels, avoid clipping, remove clicks/pops)."
-        )
-    if mos.get("mos_score") is not None and float(mos.get("mos_score")) < 3.0:
-        suggestions.append(
-            "Try a different voice/model or adjust synthesis settings (MOS suggests unnaturalness)."
-        )
-    if len(faithfulness_violations) > 0:
-        suggestions.append(
-            "Manually review content against the script (faithfulness tool flagged potential semantic issues)."
-        )
-
-    while len(suggestions) < 3:
-        suggestions.append(
-            "Spot-check the transcript vs expected script and rerun VoiceQA after any audio/model changes."
-        )
+    suggestions = _actionable_suggestions(analysis_data)
 
     # Render concise lists (avoid very long lines)
     pause_lines = []
@@ -399,7 +523,8 @@ def generate_qa_report(analysis_data: dict) -> dict:
     )
 
     report_text = None
-    suggestions = []
+    suggestions: list[str] = []
+    suggestions_det = _actionable_suggestions(analysis_data)
 
     try:
         report_text = llm.invoke(prompt)
@@ -427,6 +552,12 @@ def generate_qa_report(analysis_data: dict) -> dict:
                 cleaned = re.sub(r"^\s*\d+[\.\)]\s*", "", line).strip()
                 if cleaned and not cleaned.startswith("*"):
                     suggestions.append(cleaned)
+        if len(suggestions) < 3:
+            for s in suggestions_det:
+                if s not in suggestions:
+                    suggestions.append(s)
+                if len(suggestions) >= 3:
+                    break
     else:
         score = _compute_score(verdict, analysis_data, failures)
         report_text = _fallback_report_text(verdict, failures, analysis_data, score)
@@ -434,18 +565,13 @@ def generate_qa_report(analysis_data: dict) -> dict:
         for line in report_text.splitlines():
             if re.match(r"^\s*\d+\.\s+", line):
                 suggestions.append(re.sub(r"^\s*\d+\.\s+", "", line).strip())
+        if len(suggestions) < 3:
+            suggestions = suggestions_det
 
     return {
         "report_text": report_text,
         "score": score,
         "verdict": verdict,
         "failures": failures,
-        "suggestions": suggestions,
+        "suggestions": suggestions[:3],
     }
-    name_lines = []
-    for m in name_mismatches[:5]:
-        name_lines.append(
-            f"- expected={m.get('value')} best_match={m.get('best_match')} ratio={m.get('best_ratio')}"
-        )
-    if len(name_mismatches) > 5:
-        name_lines.append(f"- ... ({len(name_mismatches) - 5} more)")

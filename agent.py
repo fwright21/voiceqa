@@ -1,6 +1,8 @@
 import logging
 from pathlib import Path
 
+from typing import Any, Dict, List
+
 from tools.transcribe_audio import transcribe_audio
 from tools.diff_transcript import diff_transcript
 from tools.detect_pauses import detect_pauses
@@ -9,16 +11,18 @@ from tools.analyse_prosody import analyse_prosody
 from tools.predict_mos import predict_mos
 from tools.alignment import build_alignment
 from tools.check_pause_naturalness import check_pause_naturalness
+from tools.check_speaking_rate import check_speaking_rate
 from tools.check_entity_fidelity import check_entity_fidelity
 from tools.check_name_fidelity import check_name_fidelity
 from tools.check_faithfulness import check_faithfulness
 from tools.generate_qa_report import generate_qa_report
 from tools.save_report import save_report
+from tools.eval_runner import compute_weighted_score
 
 logger = logging.getLogger(__name__)
 
 
-def run_analysis(audio_path: str, expected_script: str) -> dict:
+def run_analysis(audio_path: str, expected_script: str, language: str = "en") -> dict:
     """
     Run the full voice_qa v2 pipeline on one audio file.
 
@@ -70,12 +74,29 @@ def run_analysis(audio_path: str, expected_script: str) -> dict:
 
     # ── Stage 4: Pauses ───────────────────────────────────────────────────────
     logger.info("Stage 4/10 — Detecting pauses")
-    pause_result = detect_pauses.func(audio_path=audio_path)
-    pause_naturalness = check_pause_naturalness.func(alignment=alignment, pauses=pause_result)
+    pause_result = detect_pauses.func(
+        audio_path=audio_path,
+        word_spans=alignment.get("word_spans"),
+        phrase_spans=alignment.get("phrase_spans"),
+        transcript=transcript_text,
+        language=language or "en",
+    )
+    pause_naturalness = check_pause_naturalness.func(
+        alignment=alignment, pauses=pause_result
+    )
+
+    # ── Stage 4.5: Speaking rate ──────────────────────────────────────────
+    logger.info("Stage 4.5/10 — Checking speaking rate")
+    speaking_rate_result = check_speaking_rate.func(
+        phrase_spans=alignment.get("phrase_spans") or [],
+        language=language or "en",
+    )
 
     # ── Stage 5: Prosody ──────────────────────────────────────────────────────
     logger.info("Stage 5/10 — Analysing prosody")
-    prosody_result = analyse_prosody.func(audio_path=audio_path)
+    prosody_result = analyse_prosody.func(
+        audio_path=audio_path, language=language or "en"
+    )
 
     # ── Stage 6: MOS ─────────────────────────────────────────────────────────
     logger.info("Stage 6/10 — Predicting MOS")
@@ -105,21 +126,46 @@ def run_analysis(audio_path: str, expected_script: str) -> dict:
     # ── Stage 9: QA report + verdict ─────────────────────────────────────────
     logger.info("Stage 9/10 — Generating QA report")
     analysis_data = {
-        "audio_name":            audio_name,
-        "transcript":            transcript_text,
+        "audio_name": audio_name,
+        "transcript": transcript_text,
         "transcript_confidence": transcript_confidence,
-        "alignment":             alignment,
-        "pause_naturalness":     pause_naturalness,
-        "accuracy":              diff,
-        "artifacts":             artifact_result,
-        "pauses":                pause_result,
-        "prosody":               prosody_result,
-        "mos":                   mos_result,
-        "entity_fidelity":       entity_result,
-        "name_fidelity":         name_result,
-        "faithfulness":          faithfulness_result,
+        "alignment": alignment,
+        "pause_naturalness": pause_naturalness,
+        "speaking_rate": speaking_rate_result,
+        "accuracy": diff,
+        "artifacts": artifact_result,
+        "pauses": pause_result,
+        "prosody": prosody_result,
+        "mos": mos_result,
+        "entity_fidelity": entity_result,
+        "name_fidelity": name_result,
+        "faithfulness": faithfulness_result,
     }
     report = generate_qa_report.func(analysis_data=analysis_data)
+    weighted_score = compute_weighted_score(
+        _build_scoring_metrics(
+            pause_result=pause_result,
+            speaking_rate_result=speaking_rate_result,
+            prosody_result=prosody_result,
+            mos_result=mos_result,
+            name_result=name_result,
+            faithfulness_result=faithfulness_result,
+        )
+    )
+    report["score_breakdown"] = weighted_score["score_breakdown"]
+    report_score = report.get("score")
+    report_score = (
+        int(report_score)
+        if isinstance(report_score, (int, float))
+        else weighted_score["score"]
+    )
+    report["score"] = min(
+        report_score,
+        weighted_score["score"],
+    )
+    report["verdict"] = _more_severe_verdict(
+        report.get("verdict"), weighted_score["verdict"]
+    )
 
     # ── Stage 10: Persist ─────────────────────────────────────────────────────
     logger.info("Stage 10/10 — Saving to database")
@@ -147,27 +193,55 @@ def run_analysis(audio_path: str, expected_script: str) -> dict:
     )
 
     return {
-        "report_id":   saved["report_id"],
-        "audio_name":  audio_name,
-        "verdict":     report["verdict"],
-        "failures":    report["failures"],
-        "score":       report["score"],
-        "transcript":  transcript_text,
+        "report_id": saved["report_id"],
+        "audio_name": audio_name,
+        "verdict": report["verdict"],
+        "failures": report["failures"],
+        "score": report["score"],
+        "score_breakdown": report.get("score_breakdown", []),
+        "transcript": transcript_text,
         "metrics": {
-            "accuracy":        diff,
-            "artifacts":       artifact_result,
-            "pauses":          pause_result,
-            "prosody":         prosody_result,
-            "mos":             mos_result,
-            "alignment":       alignment,
+            "accuracy": diff,
+            "artifacts": artifact_result,
+            "pauses": pause_result,
+            "prosody": prosody_result,
+            "mos": mos_result,
+            "alignment": alignment,
             "pause_naturalness": pause_naturalness,
+            "speaking_rate": speaking_rate_result,
             "entity_fidelity": entity_result,
-            "name_fidelity":   name_result,
-            "faithfulness":    faithfulness_result,
+            "name_fidelity": name_result,
+            "faithfulness": faithfulness_result,
         },
+        "flagged_regions": _collect_flagged_regions(
+            pause_result, speaking_rate_result, prosody_result
+        ),
         "suggestions": report["suggestions"],
         "report_text": report["report_text"],
     }
+
+
+def _collect_flagged_regions(
+    pause_result: dict,
+    speaking_rate_result: dict,
+    prosody_result: dict,
+) -> List[Dict[str, Any]]:
+    """Collect flagged_regions from all metric outputs."""
+    regions: List[Dict[str, Any]] = []
+
+    for r in pause_result.get("flagged_regions") or []:
+        if isinstance(r, dict):
+            regions.append(r)
+
+    for r in speaking_rate_result.get("flagged_regions") or []:
+        if isinstance(r, dict):
+            regions.append(r)
+
+    for r in prosody_result.get("flagged_regions") or []:
+        if isinstance(r, dict):
+            regions.append(r)
+
+    return regions
 
 
 def _low_confidence_result(
@@ -183,19 +257,91 @@ def _low_confidence_result(
         wer=None,
         score=0,
         verdict="LOW_CONFIDENCE",
-        failures=["Whisper transcript confidence too low — audio may be silent or corrupted"],
+        failures=[
+            "Whisper transcript confidence too low — audio may be silent or corrupted"
+        ],
         suggestions=["Check audio file is valid and contains speech"],
         full_report="Transcript confidence too low — analysis aborted.",
         transcript_confidence="low",
     )
     return {
-        "report_id":  saved["report_id"],
+        "report_id": saved["report_id"],
         "audio_name": audio_name,
-        "verdict":    "LOW_CONFIDENCE",
-        "failures":   ["Whisper transcript confidence too low"],
-        "score":      0,
+        "verdict": "LOW_CONFIDENCE",
+        "failures": ["Whisper transcript confidence too low"],
+        "score": 0,
         "transcript": transcription.get("transcript", ""),
-        "metrics":    {},
+        "metrics": {},
+        "flagged_regions": [],
+        "score_breakdown": [],
         "suggestions": ["Check audio file is valid and contains speech"],
         "report_text": "Transcript confidence too low — analysis aborted.",
     }
+
+
+def _more_severe_verdict(left: str | None, right: str | None) -> str:
+    order = {"FAIL": 0, "REVIEW": 1, "LOW_CONFIDENCE": 2, "PASS": 3}
+    left = left or "FAIL"
+    right = right or "FAIL"
+    return left if order.get(left, 0) <= order.get(right, 0) else right
+
+
+def _max_severity(items: list[dict], default: str = "ok") -> str:
+    order = {"ok": 0, "info": 0, "warn": 1, "fail": 2}
+    max_seen = default
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        severity = item.get("severity") or item.get("level") or default
+        if order.get(severity, 0) > order.get(max_seen, 0):
+            max_seen = severity
+    return max_seen
+
+
+def _build_scoring_metrics(
+    pause_result: dict,
+    speaking_rate_result: dict,
+    prosody_result: dict,
+    mos_result: dict,
+    name_result: dict,
+    faithfulness_result: dict,
+) -> Dict[str, Dict[str, Any]]:
+    metrics: Dict[str, Dict[str, Any]] = {}
+
+    pause_regions = [
+        r
+        for r in (pause_result.get("flagged_regions") or [])
+        if isinstance(r, dict) and r.get("check") == "pause_detection"
+    ]
+    pause_severity = _max_severity(pause_regions)
+    if pause_severity != "ok":
+        metrics["unnatural_pause"] = {"severity": pause_severity}
+
+    filled_regions = [
+        r
+        for r in (pause_result.get("flagged_regions") or [])
+        if isinstance(r, dict) and r.get("check") == "filled_pause"
+    ]
+    filled_severity = _max_severity(filled_regions)
+    if filled_severity != "ok":
+        metrics["filled_pause"] = {"severity": filled_severity}
+
+    rate_severity = _max_severity(speaking_rate_result.get("segments") or [])
+    if rate_severity != "ok":
+        metrics["speaking_rate_out_of_range"] = {"severity": rate_severity}
+
+    monotone_severity = prosody_result.get("monotone_severity")
+    if monotone_severity in {"warn", "fail"}:
+        metrics["pitch_monotone"] = {"severity": monotone_severity}
+
+    mos_score = mos_result.get("mos_score") if isinstance(mos_result, dict) else None
+    if isinstance(mos_score, (int, float)) and mos_score < 3.0:
+        metrics["mos"] = {"severity": "fail" if mos_score < 2.5 else "warn"}
+
+    if len((name_result or {}).get("mismatches") or []) > 0:
+        metrics["name_fidelity_fail"] = {"severity": "fail"}
+
+    if len((faithfulness_result or {}).get("violations") or []) > 0:
+        metrics["faithfulness_warn"] = {"severity": "warn"}
+
+    return metrics
