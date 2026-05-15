@@ -154,27 +154,29 @@ def _compute_score(verdict: str, analysis_data: dict, failures: list[str]) -> in
 
 def _actionable_suggestions(analysis_data: dict) -> list[str]:
     """
-    Deterministic remediation suggestions.
+    Deterministic remediation suggestions in plain language.
 
-    Keep these stable and actionable: "what to do next" for the common failure modes.
+    Each suggestion is a single string in three parts, pipe-separated:
+        "What happened: ... || How to fix: ... || How to check: ..."
+
+    Design rules:
+      - Write for a product manager, not an engineer.
+      - No acronyms (WER, MOS, SSML, HNR, ASR) without a plain-English explanation.
+      - "How to check" is something a human can hear or see, not a number.
+      - One concrete action per "How to fix". Vendor-specific examples allowed.
     """
     suggestions: list[str] = []
 
-    def _ticket(task: str, done_when: str) -> str:
-        task = (task or "").strip().rstrip(".")
-        done_when = (done_when or "").strip().rstrip(".")
-        if not task:
-            return ""
-        if not done_when:
-            return task
-        return f"{task} (Done when: {done_when})"
+    def _suggest(what: str, fix: str, check: str) -> str:
+        return (
+            f"What happened: {what.strip().rstrip('.')}."
+            f" || How to fix: {fix.strip().rstrip('.')}."
+            f" || How to check: {check.strip().rstrip('.')}."
+        )
 
     def _add(text: str):
-        if not text:
-            return
-        if text in suggestions:
-            return
-        suggestions.append(text)
+        if text and text not in suggestions:
+            suggestions.append(text)
 
     accuracy = analysis_data.get("accuracy", {}) or {}
     wer = accuracy.get("wer")
@@ -187,121 +189,134 @@ def _actionable_suggestions(analysis_data: dict) -> list[str]:
     name_fidelity = analysis_data.get("name_fidelity", {}) or {}
     faithfulness = analysis_data.get("faithfulness", {}) or {}
 
-    # Transcript quality (WER).
+    # Transcript quality
     if isinstance(wer, (int, float)) and float(wer) > 0.15:
         _add(
-            _ticket(
-                "Improve transcript quality: slow down delivery and reduce noise/artifacts (regenerate TTS or rerecord closer to the mic)",
-                "WER <= 0.15 and the transcript reads cleanly",
+            _suggest(
+                what="The transcript doesn't match the script — many words are wrong, missing, or extra",
+                fix="Have the agent slow down and speak more clearly. If it's a recording, move closer to the mic and reduce background noise",
+                check="Re-run the clip and read the new transcript — it should read like the expected script",
             )
         )
 
-    # Entity fidelity.
+    # Entity fidelity
     entity_mismatches = entity.get("mismatches") or []
     if isinstance(entity_mismatches, list) and len(entity_mismatches) > 0:
         _add(
-            _ticket(
-                "Fix numbers/codes/dates: speak safety-critical values digit-by-digit and avoid ambiguous phrasing",
-                "Entity mismatches are 0",
+            _suggest(
+                what="The agent said the wrong number, date, or code — this is dangerous in healthcare or finance",
+                fix='Speak important numbers digit by digit ("one eight zero" instead of "one hundred eighty"). For dosages, always include the unit ("fifty milligrams")',
+                check="Listen to the flagged moment — the number, date, or code should now match what was expected",
             )
         )
 
-    # Unnatural pauses.
+    # Unnatural pauses
     max_within = pause_nat.get("max_within_phrase_gap_sec")
     if isinstance(max_within, (int, float)) and float(max_within) >= 0.9:
         _add(
-            _ticket(
-                "Remove mid-phrase pauses: simplify punctuation and split long sentences (or reduce TTS style/instability)",
-                "Max within-phrase gap is < 0.9s",
+            _suggest(
+                what="The agent paused in the middle of a sentence — sounds broken or like it's buffering",
+                fix="Shorten the sentence or split it with a period. If you're using ElevenLabs or Cartesia, try lowering the 'style' or 'stability' setting",
+                check="Replay the clip — the pause should be gone, or only appear at a comma or full stop",
             )
         )
     longest_pause = pauses.get("longest_pause_sec")
     if isinstance(longest_pause, (int, float)) and float(longest_pause) > 3.0:
         _add(
-            _ticket(
-                "Trim trailing dead air and tighten turn-taking (often extra punctuation or padding)",
-                "Longest pause is <= 3.0s",
+            _suggest(
+                what="The agent had a long silent gap (over 3 seconds) — sounds like it froze",
+                fix="Trim silence from the end of the audio, or remove extra punctuation/padding from the script that the voice is interpreting as a long pause",
+                check="Replay the clip — there should be no awkward silences longer than a normal breath",
             )
         )
 
-    # Speaking rate.
+    # Speaking rate
     speaking_rate = analysis_data.get("speaking_rate", {}) or {}
     segments = speaking_rate.get("segments") or []
     if isinstance(segments, list) and any(
         isinstance(s, dict) and s.get("severity") in {"warn", "fail"} for s in segments
     ):
         _add(
-            _ticket(
-                "Adjust speaking rate in flagged segments (SSML prosody rate / provider speed) and add short breaks around critical phrases",
-                "No speaking-rate segments are warn/fail",
+            _suggest(
+                what="Parts of the clip are spoken too fast or too slow — listeners can't keep up, or it feels sluggish",
+                fix="In your voice provider's settings, adjust the speed/rate. Add short pauses (commas or full stops) before important phrases like medication names",
+                check="Replay the clip — every sentence should be easy to follow at a normal listening pace",
             )
         )
 
-    # Audio artifacts.
+    # Audio artifacts
     artifacts_list = artifacts.get("artifacts") or []
     if isinstance(artifacts_list, list) and len(artifacts_list) > 0:
         _add(
-            _ticket(
-                "Reduce audio artifacts: lower gain to avoid clipping, normalize peaks, and remove clicks/pops (voice/model or de-click postprocess)",
-                "Artifact count is 0 and playback sounds clean",
+            _suggest(
+                what="The audio has crackling, clipping, or pops — sounds distorted or unprofessional",
+                fix="In your voice provider settings, lower the output volume by about 10–20%. If you're recording, move further from the mic or check your audio cable",
+                check="Replay the clip and listen for crackle, distortion, or sudden pops — the audio should sound clean",
             )
         )
 
-    # Naturalness / prosody.
+    # Naturalness / prosody
     mos_score = mos.get("mos_score")
     if isinstance(mos_score, (int, float)) and float(mos_score) < 3.5:
         _add(
-            _ticket(
-                "Make the voice sound more natural: try a different voice/model or adjust expressiveness/stability",
-                "MOS is >= 3.5 (or reviewers agree it sounds natural)",
+            _suggest(
+                what="The voice sounds robotic or unnatural — users may lose trust or hang up",
+                fix="Try a different voice or voice model from your provider. If using ElevenLabs, try a different voice or increase expressiveness. If using Cartesia, try a more natural preset",
+                check="Replay the clip — it should sound like a real person, not a synthesized voice",
             )
         )
-    monotone = prosody.get("monotone")
+    monotone = prosody.get("monotone") if isinstance(prosody, dict) else None
     if monotone is True:
         _add(
-            _ticket(
-                "Add prosody: increase expressiveness or add SSML emphasis (pitch/rate) on key phrases",
-                "Monotone flag clears (or pitch variance is acceptable)",
+            _suggest(
+                what="The voice sounds flat — no rise or fall in tone, like reading a list out loud",
+                fix="In your voice provider settings, increase expressiveness or style. If supported, mark key phrases for emphasis in the script",
+                check="Replay the clip — important words and questions should sound emphasized, not monotone",
             )
         )
 
-    # Name fidelity.
+    # Name fidelity
     name_mismatches = name_fidelity.get("mismatches") or []
     if isinstance(name_mismatches, list) and len(name_mismatches) > 0:
         _add(
-            _ticket(
-                "Fix name pronunciation: respell phonetically or use SSML phoneme (if supported)",
-                "Name mismatches are 0",
+            _suggest(
+                what="A person's name or proper noun was mispronounced or mistranscribed",
+                fix="Respell the name how it sounds (for example, write 'Siobhan' as 'Shi-vawn'). Most voice providers also let you upload a pronunciation dictionary",
+                check="Replay the clip — the name should sound the way it's meant to be pronounced",
             )
         )
 
-    # Faithfulness.
+    # Faithfulness
     violations = faithfulness.get("violations") or []
     if isinstance(violations, list) and len(violations) > 0:
         _add(
-            _ticket(
-                "Reduce meaning drift: tighten constraints/prompting or template safety-critical phrasing",
-                "Faithfulness violations are 0",
+            _suggest(
+                what="The agent said something with a different meaning than the script — could be missing a 'not', adding a claim, or changing the intent",
+                fix="Tighten the prompt so the agent must use the exact wording for safety-critical statements. For regulated content, use a template instead of free generation",
+                check="Read the new transcript next to the expected script — the meaning should match exactly, not just the gist",
             )
         )
 
-    # Ensure at least 3 items, but avoid fluff.
+    # Ensure at least 3 items
     _add(
-        _ticket(
-            "Review the flagged moments (Jump) and confirm the issue is real (not just ASR formatting variance)",
-            "A human listener agrees the issue is present",
+        _suggest(
+            what="VoiceQA flagged this clip but you should confirm it manually before changing anything",
+            fix="Click the 'Jump' button next to any flagged moment to hear it. Decide if the issue is real or just a quirk of how VoiceQA reads the audio",
+            check="A teammate listens and agrees the problem is real",
         )
     )
     _add(
-        _ticket(
-            "After changes, rerun the same suite and compare against a saved baseline",
-            "No new FAIL/REVIEW cases and the target case improves",
+        _suggest(
+            what="You won't know if a fix actually worked unless you re-test",
+            fix="Save a baseline of the current suite results, then re-run after your changes",
+            check="The same case now passes, and no other cases got worse",
         )
     )
     _add(
-        _ticket(
-            "If the issue seems flaky, rerun the same clip 2-3 times before changing thresholds/weights",
-            "You can reproduce (or rule out) the issue reliably",
+        _suggest(
+            what="Some voice problems are random and don't happen on every run",
+            fix="Re-run the same clip 2 or 3 times before deciding the issue is real",
+            check="The same problem shows up consistently across runs",
         )
     )
 
@@ -426,25 +441,33 @@ def _fallback_report_text(
     else:
         lines.append("Faithfulness violations: None")
 
-    lines.extend(
-        [
-            "",
-            "### Suggestions",
-            "1. " + suggestions[0],
-            "2. " + suggestions[1],
-            "3. " + suggestions[2],
-            "",
-        ]
-    )
+    def _fmt_suggestion_markdown(idx: int, raw: str) -> list[str]:
+        parts = [p.strip() for p in str(raw).split("||")]
+        if len(parts) >= 2:
+            out = [f"{idx}. {parts[0]}"]
+            for part in parts[1:]:
+                out.append(f"   {part}")
+            return out
+        return [f"{idx}. {raw}"]
+
+    lines.append("")
+    lines.append("### Suggestions")
+    for i, s in enumerate(suggestions[:3], start=1):
+        lines.extend(_fmt_suggestion_markdown(i, s))
+    lines.append("")
 
     return "\n".join(lines)
 
 
 _REPORT_PROMPT = """\
-You are VoiceQA, an expert QA engineer evaluating Text-to-Speech (TTS) and voice agent outputs.
+You are VoiceQA. You write reports about voice agent audio for product managers and
+compliance reviewers — NOT engineers. Your readers do not know what WER, MOS, SSML, HNR,
+ASR, jitter, or shimmer mean. If you mention any of them, you must explain in plain English
+on the same line (e.g., "transcript accuracy (WER) — how closely the words match the script").
 
-You have been given structured analysis results for one audio file. The verdict has already been
-computed from deterministic rules — your job is to write a clear, human-readable explanation.
+You have been given structured analysis results for one audio file. The verdict has already
+been computed from deterministic rules — your job is to translate the technical results into
+clear, plain-language explanations.
 
 ## Verdict
 {verdict}
@@ -463,27 +486,38 @@ Write a concise QA report in this EXACT format. Do not add sections or change he
 [JUST a single integer between 0 and 100. Nothing else on this line.]
 
 ### Summary
-2-3 sentences summarising the quality and the verdict.
+2-3 sentences in plain English. What does this clip sound like, and is it safe to ship?
 
 ### Transcript Accuracy
-Comment on WER score and any specific word errors.
+In plain English: did the agent say what the script asked for? Name specific words that came
+out wrong if any. Avoid raw metric names without explanation.
 
 ### Audio Quality
-Comment on prosody (pitch, jitter, shimmer, HNR) and MOS score.
+In plain English: does the voice sound natural, robotic, distorted, or flat? Mention the
+overall impression a listener would have.
 
 ### Pause Analysis
-Flag any unnatural pauses with timestamps and durations.
+Flag any pauses that would sound broken or awkward to a listener, with timestamps.
 
 ### Audio Artifact Analysis
-List any detected artifacts.
+In plain English: any crackling, clipping, pops, or distortion?
 
 ### Entity & Faithfulness
-Comment on entity fidelity and faithfulness results.
+In plain English: did the agent get numbers, dates, codes, names, and meaning right?
 
 ### Suggestions
-1. First suggestion
-2. Second suggestion
-3. Third suggestion
+Write EXACTLY 3 suggestions in this format — each one a single line with three parts
+separated by "||":
+
+1. What happened: [plain-English description of the problem] || How to fix: [one concrete action; vendor-specific examples like ElevenLabs/Cartesia are welcome] || How to check: [what a human can hear or see when it's fixed — NOT a metric threshold]
+2. (same format)
+3. (same format)
+
+Rules for the three suggestions:
+- "What happened" must describe what a listener would experience, not internal metric names.
+- "How to fix" must be ONE action, not a list of options separated by "or".
+- "How to check" must be something a human can verify by listening or reading — never "WER < 0.15" or any number.
+- No acronyms in any of the three parts unless explained.
 """
 
 

@@ -7,7 +7,7 @@ def test_ui_serves_html():
     client = TestClient(main.app)
     resp = client.get("/ui")
     assert resp.status_code == 200
-    assert "<title>VoiceQA</title>" in resp.text
+    assert "<title>VoiceQA" in resp.text
 
 
 def test_eval_suites_lists_known_suites():

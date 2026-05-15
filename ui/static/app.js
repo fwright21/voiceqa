@@ -114,6 +114,35 @@ function renderListEl(items) {
 
 function parseSuggestionTask(text) {
   const s = String(text || "").trim();
+
+  // New plain-language format: "What happened: ... || How to fix: ... || How to check: ..."
+  if (s.includes("||")) {
+    const parts = s.split("||").map((p) => p.trim()).filter(Boolean);
+    const sections = { what: null, fix: null, check: null };
+    let title = null;
+    for (const p of parts) {
+      const lower = p.toLowerCase();
+      if (lower.startsWith("what happened:")) {
+        sections.what = p.replace(/^what happened:\s*/i, "").trim();
+        if (!title) title = sections.what;
+      } else if (lower.startsWith("how to fix:")) {
+        sections.fix = p.replace(/^how to fix:\s*/i, "").trim();
+      } else if (lower.startsWith("how to check:")) {
+        sections.check = p.replace(/^how to check:\s*/i, "").trim();
+      } else if (!title) {
+        title = p;
+      }
+    }
+    return {
+      title: title || s,
+      doneWhen: null,
+      what: sections.what,
+      fix: sections.fix,
+      check: sections.check,
+    };
+  }
+
+  // Legacy format: "task (Done when: criterion)"
   const m = s.match(/^(.*)\s+\(Done when:\s*(.*)\)\s*$/);
   if (!m) return { title: s, doneWhen: null };
   return { title: (m[1] || "").trim(), doneWhen: (m[2] || "").trim() };
@@ -160,7 +189,30 @@ function renderTaskListEl(items) {
     title.textContent = t.title || "Next action";
     text.appendChild(title);
 
-    if (t.doneWhen) {
+    // New 3-part plain-language suggestion
+    if (t.fix || t.check) {
+      if (t.fix) {
+        const fixRow = document.createElement("div");
+        fixRow.className = "task-fix";
+        const fixLabel = document.createElement("span");
+        fixLabel.className = "task-label";
+        fixLabel.textContent = "How to fix: ";
+        fixRow.appendChild(fixLabel);
+        fixRow.appendChild(document.createTextNode(t.fix));
+        text.appendChild(fixRow);
+      }
+      if (t.check) {
+        const checkRow = document.createElement("div");
+        checkRow.className = "task-check-line";
+        const checkLabel = document.createElement("span");
+        checkLabel.className = "task-label";
+        checkLabel.textContent = "How to check: ";
+        checkRow.appendChild(checkLabel);
+        checkRow.appendChild(document.createTextNode(t.check));
+        text.appendChild(checkRow);
+      }
+    } else if (t.doneWhen) {
+      // Legacy format
       const done = document.createElement("div");
       done.className = "task-done";
       done.textContent = `Done when: ${t.doneWhen}`;

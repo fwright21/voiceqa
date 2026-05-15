@@ -301,6 +301,24 @@ summary:focus-visible {
   font-size: 12.5px;
   line-height: 1.35;
 }
+.task-fix,
+.task-check-line {
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.task-check-line {
+  color: var(--muted);
+}
+.task-label {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 4px;
+}
 
 .transcript-grid {
   display: grid;
