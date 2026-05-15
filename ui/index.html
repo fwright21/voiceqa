@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>VoiceQA</title>
+    <title>VoiceQA — Hallucination detection for voice agents</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -13,7 +13,7 @@
           <div class="logo">VQ</div>
           <div>
             <div class="title">VoiceQA</div>
-            <div class="subtitle">Voice agent QA — scripts, audio, and eval suites</div>
+            <div class="subtitle">Hallucination detection — independent audit for voice agents</div>
           </div>
         </div>
         <div class="header-actions">
@@ -25,11 +25,10 @@
       <section class="hero card" aria-label="Quick start">
         <div class="hero-top">
           <div>
-            <div class="kicker">Quick start</div>
-            <h1 class="hero-title">Catch voice agent failures transcript evals miss.</h1>
+            <div class="kicker">Independent audit</div>
+            <h1 class="hero-title">Voice agents fabricate. VoiceQA is the witness.</h1>
             <div class="hero-subtitle">
-              VoiceQA checks both <strong>content fidelity</strong> and <strong>delivery quality</strong> — from exact numbers and meaning flips
-              to pauses, clipping, and regressions across eval suites.
+              The independent audit layer for your STT, TTS, and full-duplex pipeline — catches hallucinations at every stage, across any vendor.
             </div>
           </div>
           <div class="hero-actions">
@@ -66,7 +65,7 @@
         <section class="panel active" id="tab-single" role="tabpanel">
           <h2>Analyse one clip</h2>
           <p class="muted">
-            Upload an audio clip and the expected script. VoiceQA runs fidelity + audio checks and returns a verdict with flagged issues.
+            Upload audio and an expected script. VoiceQA audits independently — re-deriving what was actually said from the waveform, not trusting any vendor transcript.
           </p>
 
           <form id="single-form" class="card">
@@ -152,7 +151,7 @@
         <section class="panel" id="tab-eval" role="tabpanel">
           <h2>Run an eval suite</h2>
           <p class="muted">
-            Run a curated eval suite to review failures, compare against a baseline, and track regressions over time.
+            Run a curated suite to audit your voice agent across multiple cases — catch hallucinations, track regressions, compare against a baseline.
           </p>
 
           <div class="card">
