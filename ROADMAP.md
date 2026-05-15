@@ -2,7 +2,7 @@
 
 This is an intentionally pragmatic roadmap for VoiceQA: prioritize **deterministic** safety checks and a tight eval loop.
 
-_Full specs: `plans/replanning-specs.md`_
+_Full specs: `plans/replanning-specs.md` · `plans/hallucination-specs.md`_
 _Demo: 2026-05-15 (Barcelona AI / Happy Operators)_
 _Collaboration: Rhesis AI integration (post-demo)_
 
@@ -77,6 +77,41 @@ _Collaboration: Rhesis AI integration (post-demo)_
   - Regional vocabulary (coche vs carro vs auto)
 
 - Broader language support beyond EN/ES (tokenization already Unicode-safe after Spec 12)
+
+## Hallucination detection — VoiceQA as independent audit layer
+
+Voice fabrication is not Whisper-specific. It happens at every layer (STT, TTS, full-duplex) and across every vendor (Whisper, Deepgram, ElevenLabs, Cartesia, Play.ht, Claude voice, ChatGPT voice). VoiceQA's role is to act as an independent witness that doesn't trust any vendor's self-report.
+
+Full design: `plans/hallucination-specs.md`. Ship order: **13.5 → 14b → 16 → 14a → 14c → 14d → 15 → 17**.
+
+- **Vendor-agnostic transcript interface** (Spec 13.5 — prerequisite refactor):
+  - New `tools/transcript.py` with `Transcript`, `WordSpan`, `SegmentConf` dataclasses + `TranscriberBackend` protocol
+  - Wrap existing `transcribe_audio.py` as `WhisperBackend`; ship `UserProvidedBackend` so VoiceQA can audit vendor STT output without re-transcribing
+  - Distinguishes `transcript_under_test` (the system being audited) from `audit_transcript` (VoiceQA's independent witness)
+  - All downstream checks consume the interface — graceful degradation when a backend doesn't expose confidence
+
+- **STT fabrication & substitution detection** (Spec 14, split):
+  - **14a — Silence fabrication:** word timestamps cross-referenced with per-frame RMS; words in silent regions → fabricated
+  - **14b — Phonetic substitution (highest-value):** force-align the *transcript* (not the expected script) to audio via MMS_FA; low per-word alignment confidence = audio phonemes don't match transcribed word (catches "apuntado" → "atontado", "metoprolol" → "metoprolole" — happens with any STT, any language)
+  - **14c — Critical-term phonetic neighbor:** G2P + phoneme Levenshtein from each transcript word to suite's critical terms; near-misses are always FAIL (cheap, deterministic)
+  - **14d — Independent phoneme verification:** wav2vec2-phoneme on audio, compare to G2P(transcript); the only audio-side check that works without a reference script — enables Spec 17
+
+- **TTS output fidelity** (Spec 16):
+  - Re-transcribe TTS-rendered audio (any vendor) → WER against reference; flag high-severity mismatches on numbers, proper nouns, critical terms
+  - Vendor-agnostic by design: audited TTS can be anything, audit transcriber is pluggable
+  - UI: mismatched tokens become clickable timestamp markers (extends Spec 05)
+
+- **Per-segment confidence propagation** (Spec 15):
+  - Mark `Transcript.segments` with `confidence < 0.6` or `no_speech_prob > 0.6` as low-confidence
+  - Entity/vitals/term fidelity checks downgrade `fail` → `warn` when the flagged token overlaps a low-confidence segment — prevents false FAILs from bad STT segments
+  - Skips gracefully when a backend exposes no confidence at all (vendor-agnostic)
+
+- **Full-duplex model auditing** (Spec 17):
+  - For Claude voice / ChatGPT voice / Gemini Live etc., where there's no separate STT/TTS to instrument
+  - Independently transcribe `audio_in` and `audio_out` with an audit backend; apply Specs 14/16 to both sides
+  - Optional multi-witness consensus: run two different audit backends, disagreements = high-suspicion
+  - New suite mode `full_duplex` with paired input/output audio
+  - Composes everything above — ships last
 
 ## Long-term
 

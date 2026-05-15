@@ -1,32 +1,32 @@
-# VoiceQA
+# VoiceQA — Hallucination detection for voice agents
 
-Local-first QA for voice agents — catch transcript errors, meaning drift, and audio issues **before they reach production**.
+**The independent audit layer for your STT, TTS, and full-duplex pipeline.**
 
-Voice agents can pass transcript-based evals and still fail real-world QA:
-- a spoken number can be wrong (`92%` → `72%`)
-- a negation can disappear (“denies chest pain” → “chest pain”)
-- a long pause can make the agent sound broken even when the words are correct
-- clipping/instability can undermine trust and usability
+Voice agents fabricate content at every layer — and most teams only check one:
 
-In healthcare (and other high-stakes settings), “approximately right” is often still wrong.
+- **STT (Whisper, Deepgram, AssemblyAI, …):** invents words during silence, substitutes rare/domain words with common phonetic neighbors (`metoprolol` → `metoprolole`, `apuntado` → `atontado`). Worse in non-English and accented audio.
+- **TTS (ElevenLabs, Cartesia, Play.ht, OpenAI TTS, …):** mispronounces medication names, drops syllables, garbles numbers. Pipeline logs show correct text was generated; audio rendered something different.
+- **Full-duplex models (Claude voice, ChatGPT voice, Gemini Live):** hallucinate conversational content with no separate STT/TTS boundary to instrument.
 
-VoiceQA exists to catch the failures transcript evals miss.
+VoiceQA is the **independent witness**. It doesn't trust any vendor in your pipeline — it re-derives signal from the audio itself. In healthcare, finance, insurance, and legal voice agents, "approximately right" is a compliance violation, and vendor confidence scores are biased toward saying the vendor was right.
 
 ## Mental model
 
-VoiceQA is a QA harness, not just an analysis UI:
-1. Provide **expected script** + **actual audio**
-2. Run layered checks (deterministic first; LLM judge is optional and advisory)
+VoiceQA is the audit layer between your voice pipeline and production:
+1. Provide **audio** (+ optional **expected script**)
+2. Run layered, deterministic checks — VoiceQA acts as an independent witness, not a vendor self-report
 3. Return a structured verdict: `PASS | REVIEW | FAIL | LOW_CONFIDENCE`
 4. Save reports locally and run curated suites to catch regressions over time
 
 ## Why this is different
 
-VoiceQA is designed to **fail loudly on the things that matter**:
-- **Deterministic-first**: entities/vitals/terms/pauses/artifacts don’t depend on an LLM
+VoiceQA is designed to **fail loudly on the things vendors hide**:
+- **Vendor-agnostic**: works with any STT (Whisper, Deepgram, …), any TTS (ElevenLabs, Cartesia, …), any full-duplex model — VoiceQA never trusts the vendor under test
+- **Deterministic-first**: entities/vitals/terms/pauses/artifacts don't depend on an LLM judge
+- **Audio-side verification**: forced alignment + phoneme checks re-derive what was actually said, independent of whatever transcript the vendor returned
 - **Local-first**: practical for sensitive workflows (use synthetic scripts for public repos; keep audio local)
 - **Regression-oriented**: curated suites + baselines, not one-off inspection
-- **Graceful degradation**: if Ollama or optional tooling isn’t available, the system still runs end-to-end
+- **Graceful degradation**: if Ollama or optional tooling isn't available, the system still runs end-to-end
 
 Transcript accuracy is necessary, not sufficient. VoiceQA is built for the rest.
 
@@ -58,9 +58,10 @@ Accepts an audio file plus the expected script, runs a layered pipeline, and ret
 
 ## Who this is for
 
-- Teams building **healthcare voice agents** (or any high-stakes spoken output)
-- Teams testing **TTS / generated spoken responses** where “sounds right” matters
-- Builders who need **repeatable, local/private** evaluation workflows
+- Teams building voice agents in **regulated industries** — healthcare, finance, insurance, legal, collections — where a hallucinated medication, dosage, or disclosure is a compliance violation, not a UX bug
+- Teams shipping **multilingual voice agents** where STT phonetic substitution gets worse on non-English audio
+- Teams using **full-duplex voice models** (Claude voice, ChatGPT voice) and finding existing eval tools have no answer
+- Builders who need **repeatable, local/private** evaluation workflows without sending audio to a third-party cloud
 
 ## Stack
 
